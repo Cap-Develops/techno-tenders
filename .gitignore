@@ -1,0 +1,6 @@
+.vercel/
+supabase/
+db/
+tools/
+.vercelignore
+.DS_Store

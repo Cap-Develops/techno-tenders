@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Учёт тендеров — Техноинтеллект</title>
+<link rel="stylesheet" href="styles.css">
+<script src="diag.js"></script>
+<script src="supabase-2.110.min.js"></script>
+<script src="auth.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+
+<!-- ШАПКА -->
+<header class="header">
+  <div class="header-logo">📑</div>
+  <div>
+    <div class="header-title">Учёт тендеров</div>
+    <div class="header-sub">Техноинтеллект</div>
+  </div>
+  <nav class="header-nav">
+    <a href="index.html" class="nav-btn active">Дашборд</a>
+    <a href="balance.html" class="nav-btn">Баланс</a>
+    <span class="header-user" id="userName"></span>
+    <button class="btn-exit" onclick="Auth.signOut()">Выйти</button>
+  </nav>
+</header>
+
+<div class="container">
+
+  <div id="errorBanner" class="error-banner"></div>
+
+  <!-- KPI -->
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Баланс</div>
+      <div class="kpi-value" id="kpiBalance">—</div>
+      <div class="kpi-sub" id="kpiBalanceSub">&nbsp;</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Активные заявки</div>
+      <div class="kpi-value" id="kpiActive">—</div>
+      <div class="kpi-sub">подготовка · подана · подписание</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Дедлайны ≤ 7 дней</div>
+      <div class="kpi-value" id="kpiDeadlines">—</div>
+      <div class="kpi-sub" id="kpiDeadlinesSub">&nbsp;</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Win rate</div>
+      <div class="kpi-value" id="kpiWinrate">—</div>
+      <div class="kpi-sub">выиграно / (выиграно + проиграно + отклонено)</div>
+    </div>
+  </div>
+
+  <!-- ФИЛЬТРЫ + ПОИСК -->
+  <div class="card" style="margin-bottom:20px">
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Поиск по номеру, предмету, заказчику...">
+      <a href="tender.html?new=1" class="btn-primary owner-only" id="btnNewTender">+ Тендер</a>
+    </div>
+    <div class="chips" id="statusChips"></div>
+  </div>
+
+  <!-- ТАБЛИЦА -->
+  <div class="card">
+    <div class="table-wrap">
+      <table class="data-table dense" id="tendersTable">
+        <thead>
+          <tr>
+            <th>№ закупки</th>
+            <th>Предмет / Заказчик</th>
+            <th style="text-align:right">НМЦК</th>
+            <th style="text-align:right">Наша цена</th>
+            <th>Площадка</th>
+            <th>Подача</th>
+            <th style="text-align:right">Вознагр.</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody id="tendersBody"></tbody>
+      </table>
+    </div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      <div class="empty-state-icon">📭</div>
+      <div class="empty-state-title" id="emptyTitle">Тендеров пока нет</div>
+      <div class="empty-state-text" id="emptyText">Добавьте первый тендер кнопкой «+ Тендер»</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var _tenders = [];
+  var _filterStatus = 'all';
+  var _search = '';
+  var _openId = null; // id тендера с раскрытой детальной строкой (одна за раз)
+  // Документы всех тендеров одним запросом: { tender_id: [строки tt_documents] }.
+  // Запрос на строку таблицы делать нельзя - это N запросов на отрисовку.
+  var _docsBy = {};
+
+  var esc = Common.esc;
+
+  function diag(step, detail) { if (window.TTDiag) TTDiag.log(step, detail); }
+
+  function showError(msg) {
+    var b = document.getElementById('errorBanner');
+    b.textContent = (b.style.display === 'block' && b.textContent) ? b.textContent + '; ' + msg : msg;
+    b.style.display = 'block';
+  }
+
+  // Диагностика: любая необработанная ошибка страницы — текстом в баннер.
+  // AbortError проигравшего hedge-канала сюда не доходит — гасится в common.js/auth.js.
+  window.addEventListener('error', function (e) { showError('Ошибка страницы: ' + e.message); });
+  window.addEventListener('unhandledrejection', function (e) {
+    showError('Ошибка запроса: ' + ((e.reason && e.reason.message) || e.reason || 'неизвестно'));
+  });
+
+  // ═══ KPI ═══
+  function renderBalance(balance) {
+    var el = document.getElementById('kpiBalance');
+    var sub = document.getElementById('kpiBalanceSub');
+    el.textContent = Common.fmtMoney(balance);
+    el.classList.remove('pos', 'neg');
+    if (balance < 0) {
+      el.classList.add('neg');
+      sub.textContent = 'компания должна';
+    } else if (balance > 0) {
+      el.classList.add('pos');
+      sub.textContent = 'аванс';
+    } else {
+      sub.innerHTML = '&nbsp;';
+    }
+  }
+
+  function renderKPIs() {
+    var active = _tenders.filter(function (t) {
+      return Common.ACTIVE_STATUSES.indexOf(t.status) !== -1;
+    });
+    document.getElementById('kpiActive').textContent = active.length;
+
+    // Дедлайны ≤ 7 дней (только активные заявки, дедлайн ещё не прошёл)
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var week = new Date(today.getTime() + 7 * 86400000);
+    var soon = active.filter(function (t) {
+      if (!t.deadline_date) return false;
+      var d = new Date(t.deadline_date + 'T00:00:00');
+      return d >= today && d <= week;
+    }).sort(function (a, b) { return a.deadline_date < b.deadline_date ? -1 : 1; });
+    document.getElementById('kpiDeadlines').textContent = soon.length;
+    document.getElementById('kpiDeadlinesSub').innerHTML = soon.length
+      ? 'ближайший: ' + Common.fmtDate(soon[0].deadline_date)
+      : '&nbsp;';
+
+    // Win rate
+    var won = 0, closed = 0;
+    _tenders.forEach(function (t) {
+      if (t.status === 'won') { won++; closed++; }
+      else if (t.status === 'lost' || t.status === 'rejected') closed++;
+    });
+    document.getElementById('kpiWinrate').textContent = closed ? Math.round(won / closed * 100) + '%' : '—';
+  }
+
+  // ═══ ЧИПЫ-ФИЛЬТРЫ ═══
+  function renderChips() {
+    var counts = {};
+    _tenders.forEach(function (t) { counts[t.status] = (counts[t.status] || 0) + 1; });
+    var html = '<div class="chip' + (_filterStatus === 'all' ? ' active' : '') + '" data-status="all">Все <span class="chip-count">' + _tenders.length + '</span></div>';
+    Common.STATUS_ORDER.forEach(function (code) {
+      html += '<div class="chip' + (_filterStatus === code ? ' active' : '') + '" data-status="' + code + '">' +
+        esc(Common.statusInfo(code).label) + ' <span class="chip-count">' + (counts[code] || 0) + '</span></div>';
+    });
+    var wrap = document.getElementById('statusChips');
+    wrap.innerHTML = html;
+    Array.prototype.forEach.call(wrap.querySelectorAll('.chip'), function (chip) {
+      chip.addEventListener('click', function () {
+        _filterStatus = chip.getAttribute('data-status');
+        renderChips();
+        renderTable();
+      });
+    });
+  }
+
+  // ═══ ТАБЛИЦА ═══
+  function filtered() {
+    var q = _search.trim().toLowerCase();
+    var now = new Date();
+    var todayIso = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+    return _tenders.filter(function (t) {
+      if (_filterStatus !== 'all' && t.status !== _filterStatus) return false;
+      if (!q) return true;
+      // bidder-подписи в поиске: «нтнэ» / «техноинтеллект» находят тендеры
+      return [t.notice_number, t.subject, t.customer,
+              Common.bidderShort(t.bidder_company), Common.bidderLabel(t.bidder_company)].some(function (f) {
+        return String(f || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }).sort(function (a, b) {
+      // будущие дедлайны сверху по возрастанию, затем прошедшие по убыванию (недавние выше), пустые в конце
+      if (!a.deadline_date && !b.deadline_date) return 0;
+      if (!a.deadline_date) return 1;
+      if (!b.deadline_date) return -1;
+      var aPast = a.deadline_date < todayIso;
+      var bPast = b.deadline_date < todayIso;
+      if (aPast !== bPast) return aPast ? 1 : -1;
+      if (a.deadline_date === b.deadline_date) return 0;
+      var asc = a.deadline_date < b.deadline_date ? -1 : 1;
+      return aPast ? -asc : asc;
+    });
+  }
+
+  // ── хелперы плотной таблицы ──
+
+  // '2026-07-15' → «15.07.26»
+  function fmtD(iso) {
+    if (!iso) return '—';
+    var s = String(iso).slice(0, 10).split('-');
+    if (s.length !== 3) return esc(iso);
+    return s[2] + '.' + s[1] + '.' + s[0].slice(2);
+  }
+
+  // Дата события: «ДД.ММ.ГГ ЧЧ:ММ» если время есть (Postgres time отдаёт 'HH:MM:SS' - обрезаем секунды)
+  function fmtDT(date, time) {
+    var d = fmtD(date);
+    if (date && time) d += ' ' + esc(String(time).slice(0, 5));
+    return d;
+  }
+
+  // То же для detail-строки: «15.07.2026 10:00 МСК» или прочерк
+  function fmtDTFull(date, time) {
+    if (!date) return '—';
+    return Common.fmtDate(date) + (time ? ' ' + esc(String(time).slice(0, 5)) + ' МСК' : '');
+  }
+
+  // URL или текст площадки → короткий домен без протокола/www/пути
+  function platformShort(p) {
+    var s = String(p == null ? '' : p).trim();
+    if (!s) return '';
+    s = s.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+    var cut = s.search(/[\/?#]/);
+    if (cut !== -1) s = s.slice(0, cut);
+    return s;
+  }
+
+  // Подсветка даты подачи: только активные статусы и непросроченные дедлайны
+  function deadlineClass(t) {
+    if (!t.deadline_date || Common.ACTIVE_STATUSES.indexOf(t.status) === -1) return '';
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var d = new Date(t.deadline_date + 'T00:00:00');
+    var diff = Math.round((d - today) / 86400000);
+    if (diff < 0) return '';
+    if (diff < 3) return ' dl-red';
+    if (diff < 7) return ' dl-yellow';
+    return '';
+  }
+
+  // Пустое значение → прочерк, остальное экранируем
+  function dash(v) {
+    return (v === null || v === undefined || String(v).trim() === '') ? '—' : esc(v);
+  }
+
+  // Email → mailto-ссылка: href кодируем, текст экранируем; пустое → прочерк
+  function emailLink(v) {
+    if (v === null || v === undefined || String(v).trim() === '') return '—';
+    return '<a href="mailto:' + encodeURIComponent(String(v).trim()) + '">' + esc(v) + '</a>';
+  }
+
+  // Ячейка статуса: owner - select-бейдж, остальные - обычный бейдж
+  function statusCellHtml(t) {
+    var st = Common.statusInfo(t.status);
+    if (Auth.getRole() !== 'owner') {
+      return '<span class="status-badge" style="background:' + st.bg + ';color:' + st.color + '">' + esc(st.label) + '</span>';
+    }
+    var opts = Common.STATUS_ORDER.map(function (code) {
+      return '<option value="' + code + '"' + (code === t.status ? ' selected' : '') + '>' +
+        esc(Common.statusInfo(code).label) + '</option>';
+    }).join('');
+    return '<select class="status-select" data-id="' + esc(t.id) + '" style="background-color:' + st.bg + ';color:' + st.color + '">' + opts + '</select>';
+  }
+
+  // Мини-ячейка блока «Вознаграждение»: подпись капсом + сумма моно.
+  // label - статичная строка, сумма - из Common.fmtMoney (только числа/прочерк).
+  function feeCell(label, v, isTotal) {
+    var num = Number(v) || 0;
+    var cls = 'fee-cell' + (isTotal ? ' fee-sum' : (num > 0 ? '' : ' zero'));
+    return '<div class="' + cls + '"><div class="fee-lbl">' + label + '</div>' +
+      '<div class="fee-val">' + Common.fmtMoney(v) + '</div></div>';
+  }
+
+  // Бейдж «Подача от»: ТИ / НТНЭ в ряду бейджей ячейки «№ закупки» (серый, отличается от law-бейджа),
+  // title - полное название, пусто - ничего не рисуем (без прочерка)
+  function bidderHtml(t) {
+    var s = Common.bidderShort(t.bidder_company);
+    if (!s) return '';
+    return ' <span class="bidder-badge" title="' + esc(Common.bidderLabel(t.bidder_company)) + '">' + esc(s) + '</span>';
+  }
+
+  // Скрепка с количеством документов в ячейке «№ закупки»
+  function clipHtml(t) {
+    var n = (_docsBy[t.id] || []).length;
+    return n ? ' <span class="doc-clip" title="Документов: ' + n + '">\uD83D\uDCCE' + n + '</span>' : '';
+  }
+
+  // Список документов в раскрытой строке. Signed URL берём по клику - не заранее:
+  // ссылка живёт 300с, выписывать её для всех строк бессмысленно.
+  function docsHtml(t) {
+    var docs = _docsBy[t.id] || [];
+    if (!docs.length) return '<div class="detail-value">\u2014</div>';
+    return '<div class="detail-docs">' + docs.map(function (d) {
+      var name = d.title || d.file_name; // старые строки без title показываются по имени файла
+      var meta = Common.fmtSize(d.file_size);
+      if (d.title && d.title !== d.file_name) meta = esc(d.file_name) + ' · ' + meta;
+      return '<div class="detail-doc">' +
+        '<span>' + Common.docIcon(d.file_name) + '</span>' +
+        '<span class="detail-doc-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+        '<span class="detail-doc-meta">' + meta + '</span>' +
+        '<button type="button" class="doc-link" data-path="' + esc(d.storage_path) + '">Скачать</button>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  // Содержимое раскрывающейся строки
+  function detailHtml(t) {
+    var role = Auth.getRole();
+    var fee = '<div class="fee-grid">' +
+      feeCell('Заявка', t.fee_application) +
+      feeCell('БГ', t.fee_bg) +
+      feeCell('Аккредитация', t.fee_accreditation) +
+      feeCell('%', t.fee_percent) +
+      feeCell('Итого', t.total, true) +
+      '</div>';
+    var pf = (t.participation_fee === null || t.participation_fee === undefined) ? '—'
+      : Common.fmtMoney(t.participation_fee) +
+        (t.participation_fee_refundable === true ? ' (возвратная)' :
+         t.participation_fee_refundable === false ? ' (невозвратная)' : '');
+    var canEdit = (role === 'owner' || role === 'accountant');
+    var btnLabel = canEdit ? 'Редактировать' : 'Подробнее';
+    var btnIcon = canEdit ? '✏️' : '➜';
+    return '<div class="detail-grid">' +
+      '<div class="di-full"><div class="detail-label">Вознаграждение</div><div class="detail-value">' + fee + '</div></div>' +
+      '<div><div class="detail-label">Подача от</div><div class="detail-value">' + dash(Common.bidderLabel(t.bidder_company)) + '</div></div>' +
+      '<div><div class="detail-label">Дедлайн подачи</div><div class="detail-value">' + fmtDTFull(t.deadline_date, t.deadline_time) + '</div></div>' +
+      '<div><div class="detail-label">Плата за участие</div><div class="detail-value">' + pf + '</div></div>' +
+      '<div><div class="detail-label">Регион</div><div class="detail-value">' + dash(t.region) + '</div></div>' +
+      '<div><div class="detail-label">ОГРН заказчика</div><div class="detail-value">' + dash(t.customer_ogrn) + ' <span class="lookup-tag">' + esc(t.lookup_status || 'manual') + '</span></div></div>' +
+      '<div><div class="detail-label">Контакт</div><div class="detail-value">' + dash(t.customer_contact) + '</div></div>' +
+      '<div><div class="detail-label">Телефон</div><div class="detail-value">' + dash(t.customer_phone) + '</div></div>' +
+      '<div><div class="detail-label">Email</div><div class="detail-value">' + emailLink(t.customer_email) + '</div></div>' +
+      '<div class="di-full"><div class="detail-label">Комментарий</div><div class="detail-value detail-comment">' + dash(t.comment) + '</div></div>' +
+      '<div class="di-full"><div class="detail-label">Документы</div>' + docsHtml(t) + '</div>' +
+      '<div class="detail-section">Поставка и оплата</div>' +
+      '<div><div class="detail-label">Срок поставки</div><div class="detail-value">' + dash(t.delivery_term) + '</div></div>' +
+      '<div><div class="detail-label">Отгрузка / АКТ</div><div class="detail-value">' + dash(t.shipping_act) + '</div></div>' +
+      '<div><div class="detail-label">Получение</div><div class="detail-value">' + dash(t.receiving) + '</div></div>' +
+      '<div><div class="detail-label">Оплата</div><div class="detail-value">' + dash(t.payment_term) + '</div></div>' +
+      '<div class="di-full"><div class="detail-label">Адрес поставки</div><div class="detail-value">' + dash(t.delivery_address) + '</div></div>' +
+      '<div class="detail-actions"><a class="btn-primary" href="tender.html?id=' + encodeURIComponent(t.id) + '">' + btnIcon + ' ' + btnLabel + '</a></div>' +
+      '</div>';
+  }
+
+  // Раскрытие/сворачивание детальной строки (одна открыта за раз)
+  function toggleDetail(id) {
+    var body = document.getElementById('tendersBody');
+    if (_openId && _openId !== id) {
+      var prev = body.querySelector('tr[data-detail="' + _openId + '"]');
+      if (prev) prev.style.display = 'none';
+      var prevMain = body.querySelector('tr.main-row[data-id="' + _openId + '"]');
+      if (prevMain) prevMain.classList.remove('expanded');
+    }
+    var row = body.querySelector('tr[data-detail="' + id + '"]');
+    if (!row) { _openId = null; return; }
+    var opening = row.style.display === 'none';
+    row.style.display = opening ? '' : 'none';
+    var main = body.querySelector('tr.main-row[data-id="' + id + '"]');
+    if (main) main.classList.toggle('expanded', opening);
+    _openId = opening ? id : null;
+  }
+
+  function paintSelect(sel, code) {
+    var st = Common.statusInfo(code);
+    sel.style.backgroundColor = st.bg;
+    sel.style.color = st.color;
+  }
+
+  // Инлайн-смена статуса (owner): оптимистично, с откатом при ошибке
+  function onStatusChange(e) {
+    var sel = e.target;
+    var id = sel.getAttribute('data-id');
+    var t = null;
+    for (var i = 0; i < _tenders.length; i++) {
+      if (String(_tenders[i].id) === id) { t = _tenders[i]; break; }
+    }
+    if (!t) return;
+    var oldStatus = t.status;
+    var newStatus = sel.value;
+    if (newStatus === oldStatus) return;
+    t.status = newStatus;
+    paintSelect(sel, newStatus);
+    renderKPIs();
+    renderChips();
+    sel.disabled = true;
+
+    function rollback(msg) {
+      t.status = oldStatus;
+      sel.value = oldStatus;
+      paintSelect(sel, oldStatus);
+      sel.disabled = false;
+      renderKPIs();
+      renderChips();
+      showError(msg);
+    }
+
+    Common.updateTenderStatus(id, newStatus).then(function () {
+      sel.disabled = false;
+    }).catch(function (err) {
+      // Таймаут - не отказ: статус мог примениться, а ответ не дойти. Перечитываем.
+      if (Common.isTimeout(err)) {
+        Common.confirmAfterTimeout(function () {
+          return Common.listTenders().then(function (rows) {
+            var list = rows || [];
+            for (var i = 0; i < list.length; i++) {
+              if (String(list[i].id) === id) return list[i].status === newStatus;
+            }
+            return false;
+          });
+        }).then(function (ok) {
+          if (ok) { sel.disabled = false; return; } // применилось - тихо оставляем новое значение
+          rollback('Статус не сменился - сервер не ответил, значение возвращено. Повторите.');
+        });
+        return;
+      }
+      rollback('Не удалось сменить статус: ' + err.message);
+    });
+  }
+
+  function renderTable() {
+    var rows = filtered();
+    var body = document.getElementById('tendersBody');
+    var empty = document.getElementById('emptyState');
+    var table = document.getElementById('tendersTable');
+    _openId = null; // перерисовка закрывает раскрытую строку
+
+    if (!rows.length) {
+      body.innerHTML = '';
+      table.style.display = 'none';
+      empty.style.display = 'block';
+      var noData = !_tenders.length;
+      document.getElementById('emptyTitle').textContent = noData ? 'Тендеров пока нет' : 'Ничего не найдено';
+      document.getElementById('emptyText').textContent = noData ? 'Добавьте первый тендер кнопкой «+ Тендер»' : 'Измените фильтр или поисковый запрос';
+      return;
+    }
+    table.style.display = '';
+    empty.style.display = 'none';
+
+    body.innerHTML = rows.map(function (t, i) {
+      var law = t.law || Common.lawByNumber(t.notice_number);
+      var plat = platformShort(t.platform);
+      // Ссылка на сайт ЭТП; href строится из данных - обязательно через esc.
+      // Клик по <a> не раскрывает строку: обработчик main-row игнорирует closest('select, a')
+      var platUrl = Common.platformUrl(t.platform);
+      var platHtml = !plat ? '—'
+        : platUrl ? '<a class="platform-link" href="' + esc(platUrl) + '" target="_blank" rel="noopener">' + esc(plat) + '</a>'
+        : esc(plat);
+      var alt = (i % 2) ? ' row-alt' : '';
+      return '<tr class="main-row' + alt + '" data-id="' + esc(t.id) + '">' +
+        '<td class="td-num"><span class="num-mono">' + esc(t.notice_number) + '</span><br><span class="td-law">' + Common.lawLabel(law) + '</span>' + bidderHtml(t) + clipHtml(t) + '</td>' +
+        '<td class="td-subject"><span class="cell-main" title="' + esc(t.subject) + '">' + dash(t.subject) + '</span><span class="cell-sub" title="' + esc(t.customer) + '">' + dash(t.customer) + '</span></td>' +
+        '<td class="td-money">' + Common.fmtMoney(t.nmck) + '</td>' +
+        '<td class="td-money">' + Common.fmtMoney(t.our_price) + '</td>' +
+        '<td class="td-platform"><span class="cell-main" title="' + esc(t.platform) + '">' + platHtml + '</span></td>' +
+        '<td class="td-date' + deadlineClass(t) + '">' + fmtDT(t.deadline_date, t.deadline_time) + '</td>' +
+        '<td class="td-money' + (Number(t.total) > 0 ? ' td-total' : '') + '">' + Common.fmtMoney(t.total) + '</td>' +
+        '<td class="td-status">' + statusCellHtml(t) + '</td>' +
+        '</tr>' +
+        '<tr class="detail-row' + alt + '" data-detail="' + esc(t.id) + '" style="display:none"><td colspan="8">' + detailHtml(t) + '</td></tr>';
+    }).join('');
+
+    Array.prototype.forEach.call(body.querySelectorAll('tr.main-row'), function (tr) {
+      tr.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('select, a')) return;
+        toggleDetail(tr.getAttribute('data-id'));
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('button.doc-link'), function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        // вкладку открываем синхронно, в жесте клика - иначе её съест блокировщик
+        var w = window.open('', '_blank');
+        btn.disabled = true;
+        Common.getDocumentUrl(btn.getAttribute('data-path')).then(function (url) {
+          btn.disabled = false;
+          if (w) w.location.href = url; else window.location.href = url;
+        }).catch(function (err) {
+          btn.disabled = false;
+          if (w) w.close();
+          showError('Не удалось получить ссылку на файл: ' + err.message);
+        });
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('select.status-select'), function (sel) {
+      sel.addEventListener('click', function (e) { e.stopPropagation(); });
+      sel.addEventListener('change', onStatusChange);
+    });
+  }
+
+  // ═══ ЗАГРУЗКА ═══
+  function load() {
+    diag('load:start');
+    var user = Auth.getUser();
+    if (user) document.getElementById('userName').textContent = user.display_name || user.email || '';
+
+    Common.listTenders().then(function (data) {
+      _tenders = data || [];
+      diag('tenders:rows', _tenders.length + ' строк');
+      renderKPIs();
+      renderChips();
+      renderTable();
+      diag('load:done');
+    }).catch(function (e) {
+      diag('tenders:error', e.message);
+      showError('Не удалось загрузить тендеры: ' + e.message);
+      renderChips();
+      renderTable();
+    });
+
+    Common.listDocumentsAll().then(function (rows) {
+      diag('documents:rows', (rows || []).length + ' строк');
+      _docsBy = {};
+      (rows || []).forEach(function (d) {
+        (_docsBy[d.tender_id] = _docsBy[d.tender_id] || []).push(d);
+      });
+      // тендеры могли отрисоваться раньше - перерисуем со скрепками
+      if (_tenders.length) renderTable();
+    }).catch(function (e) {
+      diag('documents:error', e.message);
+      showError('Не удалось загрузить документы: ' + e.message);
+    });
+
+    Common.getBalance().then(function (b) {
+      diag('balance:ok', String(b));
+      renderBalance(b);
+    }).catch(function (e) {
+      diag('balance:error', e.message);
+      document.getElementById('kpiBalance').textContent = '—';
+      showError('Не удалось загрузить баланс: ' + e.message);
+    });
+  }
+
+  document.getElementById('searchInput').addEventListener('input', function (e) {
+    _search = e.target.value;
+    renderTable();
+  });
+
+  // Как на balance.html: если auth уже готов (событие успело уйти) — грузим сразу
+  if (window.Auth && Auth.isReady) {
+    diag('page:start', 'auth уже готов — грузим сразу');
+    load();
+  } else {
+    diag('page:start', 'ждём auth-ready');
+    document.addEventListener('auth-ready', function () {
+      diag('page:auth-ready', 'событие получено');
+      load();
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Вход — Учёт тендеров</title>
+<style>
+/* Локальные шрифты — без запросов к fonts.googleapis.com */
+@font-face{font-family:'Golos Text';font-style:normal;font-weight:400 900;font-display:swap;src:url('fonts/golos-text-v7-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Golos Text';font-style:normal;font-weight:400 900;font-display:swap;src:url('fonts/golos-text-v7-latin-ext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:'Golos Text';font-style:normal;font-weight:400 900;font-display:swap;src:url('fonts/golos-text-v7-cyrillic.woff2') format('woff2');unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:'Unbounded';font-style:normal;font-weight:600;font-display:swap;src:url('fonts/unbounded-v12-600-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Unbounded';font-style:normal;font-weight:600;font-display:swap;src:url('fonts/unbounded-v12-600-cyrillic.woff2') format('woff2');unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Golos Text',system-ui,Arial,sans-serif;background:#F0F4F8;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#fff;border-radius:16px;box-shadow:0 4px 32px rgba(0,0,0,.10);padding:40px;width:100%;max-width:400px}
+.logos{display:flex;align-items:center;justify-content:center;margin-bottom:32px}
+.logo-tile{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#0a3d8f,#1565C0);display:flex;align-items:center;justify-content:center;font-size:26px}
+.title{font-family:'Unbounded',sans-serif;font-size:18px;font-weight:600;color:#1A2340;text-align:center;margin-bottom:6px}
+.subtitle{font-size:13px;color:#888;text-align:center;margin-bottom:28px}
+.label{display:block;font-size:11.5px;font-weight:500;color:#64748b;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px}
+.input{width:100%;padding:12px 14px;font-size:15px;font-family:inherit;border:2px solid #E0E7EF;border-radius:8px;outline:none;transition:border-color .2s;color:#1A2340}
+.input:focus{border-color:#1565C0}
+.field{margin-bottom:16px}
+.error{display:none;font-size:13px;color:#C62828;background:#FFF5F5;border:1px solid #FFCDD2;border-radius:6px;padding:10px 12px;margin-bottom:16px}
+.btn{width:100%;padding:13px;background:#1565C0;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;transition:background .2s}
+.btn:hover{background:#0D47A1}
+.btn:disabled{background:#90A4AE;cursor:default}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logos">
+    <div class="logo-tile">📑</div>
+  </div>
+  <div class="title">Учёт тендеров</div>
+  <div class="subtitle">Техноинтеллект · Войдите в свой аккаунт</div>
+
+  <div id="err" class="error"></div>
+
+  <div class="field">
+    <label class="label" for="email">Email</label>
+    <input class="input" id="email" type="email" placeholder="Введите ваш email" autocomplete="email">
+  </div>
+  <div class="field">
+    <label class="label" for="pass">Пароль</label>
+    <input class="input" id="pass" type="password" placeholder="Введите пароль" autocomplete="current-password">
+  </div>
+
+  <button class="btn" id="btn" onclick="doLogin()">Войти</button>
+</div>
+
+<script src="supabase-2.110.min.js"></script>
+<script>
+var SUPA_URL = 'https://uclzyzztoripulpcpshp.supabase.co'; // напрямую, см. auth.js
+var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjbHp5enp0b3JpcHVscGNwc2hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODIyNzMsImV4cCI6MjA5MjM1ODI3M30.rX-WT1WdZiwRakVcUEkcg-_dnWzfU49LvgTNHYgBYQ0';
+var _sb = supabase.createClient(SUPA_URL, ANON);
+
+// Только внутренний путь: один '/' в начале, без '//' и '/\' (open redirect)
+function safeRedirect(r) {
+  return (r && r.charAt(0) === '/' && r.charAt(1) !== '/' && r.charAt(1) !== '\\') ? r : '/index.html';
+}
+
+// Если уже авторизован — сразу редирект
+_sb.auth.getSession().then(function(r) {
+  if (r.data && r.data.session) {
+    var redirect = sessionStorage.getItem('auth_redirect');
+    sessionStorage.removeItem('auth_redirect');
+    window.location.replace(safeRedirect(redirect));
+  }
+});
+
+document.getElementById('pass').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('email').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('pass').focus();
+});
+
+function doLogin() {
+  var email = document.getElementById('email').value.trim();
+  var pass = document.getElementById('pass').value;
+  var err = document.getElementById('err');
+  var btn = document.getElementById('btn');
+
+  err.style.display = 'none';
+  if (!email || !pass) { showErr('Введите email и пароль'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Вхожу...';
+
+  _sb.auth.signInWithPassword({ email: email, password: pass }).then(function(result) {
+    if (result.error) {
+      var m = result.error.message || '';
+      showErr(m.indexOf('Invalid login credentials') !== -1 ? 'Неверный email или пароль' : (m || 'Ошибка входа'));
+      btn.disabled = false;
+      btn.innerHTML = 'Войти';
+      return;
+    }
+    var redirect = sessionStorage.getItem('auth_redirect');
+    sessionStorage.removeItem('auth_redirect');
+    window.location.replace(safeRedirect(redirect));
+  }).catch(function() {
+    showErr('Ошибка соединения. Попробуйте ещё раз.');
+    btn.disabled = false;
+    btn.innerHTML = 'Войти';
+  });
+}
+
+function showErr(msg) {
+  var err = document.getElementById('err');
+  err.textContent = msg;
+  err.style.display = 'block';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Баланс — Учёт тендеров</title>
+<link rel="stylesheet" href="styles.css">
+<script src="diag.js"></script>
+<script src="supabase-2.110.min.js"></script>
+<script src="auth.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+
+<!-- ШАПКА -->
+<header class="header">
+  <div class="header-logo">📑</div>
+  <div>
+    <div class="header-title">Учёт тендеров</div>
+    <div class="header-sub">Техноинтеллект</div>
+  </div>
+  <nav class="header-nav">
+    <a href="index.html" class="nav-btn">Дашборд</a>
+    <a href="balance.html" class="nav-btn active">Баланс</a>
+    <span class="header-user" id="userName"></span>
+    <button class="btn-exit" onclick="Auth.signOut()">Выйти</button>
+  </nav>
+</header>
+
+<div class="container" style="max-width:960px">
+
+  <div id="errorBanner" class="error-banner"></div>
+
+  <!-- ТЕКУЩИЙ БАЛАНС -->
+  <div class="card balance-card">
+    <div class="kpi-label">Текущий баланс</div>
+    <div class="balance-value" id="balanceValue">—</div>
+    <div class="balance-sub" id="balanceSub">&nbsp;</div>
+  </div>
+
+  <!-- ПОПОЛНЕНИЕ (только owner) -->
+  <div class="card form-card owner-only">
+    <div class="form-section-title">Пополнить баланс</div>
+    <div class="pay-form">
+      <div>
+        <label class="form-label" for="payAmount">Сумма, ₽</label>
+        <input type="text" class="form-input" id="payAmount" inputmode="decimal" placeholder="30 600">
+      </div>
+      <div>
+        <label class="form-label" for="payDate">Дата</label>
+        <input type="date" class="form-input" id="payDate">
+      </div>
+      <div class="pay-note">
+        <label class="form-label" for="payNote">Примечание</label>
+        <input type="text" class="form-input" id="payNote" placeholder="За какие тендеры / период">
+      </div>
+      <button type="button" class="btn-primary" id="btnAddPayment">Пополнить</button>
+    </div>
+    <details class="adj-details" id="adjDetails">
+      <summary>Корректировка</summary>
+      <label class="checkbox-row">
+        <input type="checkbox" id="payAdjustment">
+        Провести как корректировку (сумма может быть отрицательной)
+      </label>
+    </details>
+    <div class="error-banner" id="payError" style="margin:14px 0 0"></div>
+    <div class="ok-note" id="payOk" style="margin:14px 0 0"></div>
+  </div>
+
+  <!-- ЛЕНТА ОПЕРАЦИЙ -->
+  <div class="card">
+    <div class="feed-header">Операции</div>
+    <div id="feedList"></div>
+    <div class="feed-total" id="feedTotal" style="display:none"></div>
+    <div class="empty-state" id="feedEmpty" style="display:none">
+      <div class="empty-state-icon">💳</div>
+      <div class="empty-state-title">Операций пока нет</div>
+      <div class="empty-state-text">Пополнения и начисления появятся здесь</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var _payments = [];
+  var _tenders = [];
+
+  function $(id) { return document.getElementById(id); }
+
+  function diag(step, detail) { if (window.TTDiag) TTDiag.log(step, detail); }
+
+  function showError(msg) {
+    var b = $('errorBanner');
+    b.textContent = msg;
+    b.style.display = 'block';
+  }
+  function showPayError(msg) {
+    var b = $('payError');
+    b.textContent = msg;
+    b.style.display = 'block';
+  }
+  function showPayOk(msg) {
+    var b = $('payOk');
+    b.textContent = msg;
+    b.style.display = 'block';
+  }
+
+  // Диагностика: любая необработанная ошибка страницы — текстом в баннер.
+  // AbortError проигравшего hedge-канала сюда не доходит — гасится в common.js/auth.js.
+  window.addEventListener('error', function (e) { showError('Ошибка страницы: ' + e.message); });
+  window.addEventListener('unhandledrejection', function (e) {
+    showError('Ошибка запроса: ' + ((e.reason && e.reason.message) || e.reason || 'неизвестно'));
+  });
+
+  function todayIso() {
+    var n = new Date();
+    return n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2);
+  }
+
+  // ═══ КАРТОЧКА БАЛАНСА ═══
+  function renderBalance(balance) {
+    var el = $('balanceValue');
+    var sub = $('balanceSub');
+    el.textContent = Common.fmtMoney(balance);
+    el.classList.remove('pos', 'neg');
+    if (balance < 0) {
+      el.classList.add('neg');
+      sub.textContent = 'Техноинтеллект должен за выполненную работу';
+    } else if (balance > 0) {
+      el.classList.add('pos');
+      sub.textContent = 'Аванс';
+    } else {
+      sub.innerHTML = '&nbsp;';
+    }
+  }
+
+  // ═══ ЛЕНТА: пополнения + начисления (тендеры с total > 0) ═══
+  function buildFeed() {
+    var items = [];
+    _payments.forEach(function (p) {
+      items.push({
+        type: 'payment',
+        date: String(p.paid_at || '').slice(0, 10),
+        created: p.created_at || '',
+        amount: Number(p.amount) || 0,
+        kind: p.kind,
+        note: p.note
+      });
+    });
+    _tenders.forEach(function (t) {
+      var total = Number(t.total) || 0;
+      if (total <= 0) return;
+      items.push({
+        type: 'accrual',
+        date: String(t.deadline_date || t.created_at || '').slice(0, 10),
+        created: t.created_at || '',
+        amount: -total,
+        id: t.id,
+        number: t.notice_number,
+        subject: t.subject
+      });
+    });
+    items.sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      return a.created < b.created ? 1 : -1;
+    });
+    return items;
+  }
+
+  function renderFeed() {
+    var items = buildFeed();
+    var list = $('feedList');
+    var total = $('feedTotal');
+    var esc = Common.esc;
+
+    if (!items.length) {
+      list.innerHTML = '';
+      total.style.display = 'none';
+      $('feedEmpty').style.display = 'block';
+      return;
+    }
+    $('feedEmpty').style.display = 'none';
+
+    list.innerHTML = items.map(function (it) {
+      if (it.type === 'payment') {
+        var badge = it.kind === 'adjustment'
+          ? '<span class="feed-badge badge-adj">Корректировка</span>'
+          : '<span class="feed-badge badge-topup">Пополнение</span>';
+        var cls = it.amount >= 0 ? 'pos' : 'neg';
+        var sign = it.amount >= 0 ? '+' : '-';
+        return '<div class="feed-row">' +
+          '<div class="feed-date">' + Common.fmtDate(it.date) + '</div>' +
+          '<div class="feed-main">' + badge +
+            (it.note ? '<span class="feed-note">' + esc(it.note) + '</span>' : '') +
+          '</div>' +
+          '<div class="feed-amount ' + cls + '">' + sign + Common.fmtMoney(Math.abs(it.amount)) + '</div>' +
+          '</div>';
+      }
+      return '<div class="feed-row">' +
+        '<div class="feed-date">' + Common.fmtDate(it.date) + '</div>' +
+        '<div class="feed-main"><span class="feed-badge badge-accrual">Начисление</span>' +
+          '<a class="feed-link" href="tender.html?id=' + encodeURIComponent(it.id) + '">' +
+            esc(it.number || '') + (it.subject ? ' - ' + esc(it.subject) : '') +
+          '</a>' +
+        '</div>' +
+        '<div class="feed-amount neg">-' + Common.fmtMoney(Math.abs(it.amount)) + '</div>' +
+        '</div>';
+    }).join('');
+
+    // строка сверки: Σ пополнений - Σ начислений = баланс
+    var sumPay = _payments.reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0);
+    var sumAcc = _tenders.reduce(function (s, t) { return s + (Number(t.total) || 0); }, 0);
+    total.style.display = '';
+    total.textContent = 'Пополнения и корректировки ' + Common.fmtMoney(sumPay) +
+      ' - начисления ' + Common.fmtMoney(sumAcc) +
+      ' = ' + Common.fmtMoney(sumPay - sumAcc);
+  }
+
+  // ═══ ЗАГРУЗКА ═══
+  function refresh() {
+    diag('refresh:start');
+    return Promise.all([Common.getBalance(), Common.listPayments(), Common.listTenders()])
+      .then(function (res) {
+        _payments = res[1] || [];
+        _tenders = res[2] || [];
+        diag('data:rows', 'баланс ' + res[0] + ', операций ' + _payments.length + ', тендеров ' + _tenders.length);
+        renderBalance(res[0]);
+        renderFeed();
+        diag('load:done');
+      }).catch(function (e) {
+        diag('refresh:error', e.message);
+        showError('Не удалось загрузить данные: ' + e.message);
+      });
+  }
+
+  // ═══ ПОПОЛНЕНИЕ / КОРРЕКТИРОВКА (owner) ═══
+  function addPayment() {
+    $('payError').style.display = 'none';
+    $('payOk').style.display = 'none';
+    var amount = Common.parseDecimal($('payAmount').value);
+    var isAdj = $('payAdjustment').checked;
+    var date = $('payDate').value;
+    if (amount === null || isNaN(amount)) { showPayError('Укажите сумму числом'); return; }
+    if (!isAdj && amount <= 0) { showPayError('Сумма пополнения должна быть больше нуля'); return; }
+    if (isAdj && amount === 0) { showPayError('Сумма корректировки не может быть нулевой'); return; }
+    if (!date) { showPayError('Укажите дату'); return; }
+
+    var btn = $('btnAddPayment');
+    btn.disabled = true;
+    var user = Auth.getUser();
+    var rec = {
+      paid_at: date,
+      amount: amount,
+      kind: isAdj ? 'adjustment' : 'topup',
+      note: $('payNote').value.trim() || null,
+      created_by: user ? user.user_id : null
+    };
+    // Снимок уже известных операций: по нему отличим наш новый платёж от старых
+    var knownIds = {};
+    _payments.forEach(function (p) { knownIds[String(p.id)] = true; });
+
+    Common.addPayment(rec).then(function () {
+      btn.disabled = false;
+      clearPayForm();
+      return refresh(); // карточка и лента обновляются без перезагрузки
+    }).catch(function (e) {
+      // Таймаут - платёж мог пройти. Слепой повтор задвоит сумму, поэтому сверяем ленту.
+      if (Common.isTimeout(e)) { confirmPayment(rec, knownIds, btn); return; }
+      btn.disabled = false;
+      showPayError('Не удалось добавить: ' + e.message);
+    });
+  }
+
+  function clearPayForm() {
+    $('payAmount').value = '';
+    $('payNote').value = '';
+    $('payAdjustment').checked = false;
+    $('adjDetails').removeAttribute('open');
+  }
+
+  /* Наш ли это платёж в свежей ленте: сумма, дата, вид совпали, id не из снимка,
+     создан за последние 2 минуты (если created_at пришёл и разобрался). */
+  function paymentLanded(rows, rec, knownIds) {
+    var now = Date.now();
+    return (rows || []).some(function (p) {
+      if (knownIds[String(p.id)]) return false;
+      if (Number(p.amount) !== Number(rec.amount)) return false;
+      if (String(p.paid_at || '').slice(0, 10) !== String(rec.paid_at).slice(0, 10)) return false;
+      if ((p.kind || '') !== rec.kind) return false;
+      var ts = Date.parse(p.created_at);
+      if (!isNaN(ts) && (now - ts) > 120000) return false; // старая запись - не наша
+      return true;
+    });
+  }
+
+  function confirmPayment(rec, knownIds, btn) {
+    Common.confirmAfterTimeout(function () {
+      return Common.listPayments().then(function (rows) { return paymentLanded(rows, rec, knownIds); });
+    }).then(function (ok) {
+      btn.disabled = false;
+      if (!ok) {
+        showPayError('Платёж не подтверждён - обновите страницу и проверьте ленту операций перед повторной попыткой');
+        return;
+      }
+      clearPayForm();
+      showPayOk((rec.kind === 'adjustment' ? 'Корректировка прошла' : 'Пополнение прошло') +
+        ' - ответ сервера просто не дошёл');
+      return refresh();
+    });
+  }
+
+  // ═══ СТАРТ ═══
+  function init() {
+    var user = Auth.getUser();
+    if (user) $('userName').textContent = user.display_name || user.email || '';
+    if (!$('payDate').value) $('payDate').value = todayIso();
+    refresh();
+  }
+
+  $('btnAddPayment').addEventListener('click', addPayment);
+
+  if (window.Auth && Auth.isReady) {
+    diag('page:start', 'auth уже готов — грузим сразу');
+    init();
+  } else {
+    diag('page:start', 'ждём auth-ready');
+    document.addEventListener('auth-ready', function () {
+      diag('page:auth-ready', 'событие получено');
+      init();
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

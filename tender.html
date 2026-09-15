@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Тендер — Учёт тендеров</title>
+<link rel="stylesheet" href="styles.css">
+<script src="supabase-2.110.min.js"></script>
+<script src="auth.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+
+<!-- ШАПКА -->
+<header class="header">
+  <div class="header-logo">📑</div>
+  <div>
+    <div class="header-title">Учёт тендеров</div>
+    <div class="header-sub">Техноинтеллект</div>
+  </div>
+  <nav class="header-nav">
+    <a href="index.html" class="nav-btn">Дашборд</a>
+    <a href="balance.html" class="nav-btn">Баланс</a>
+    <span class="header-user" id="userName"></span>
+    <button class="btn-exit" onclick="Auth.signOut()">Выйти</button>
+  </nav>
+</header>
+
+<div class="container" style="max-width:960px">
+
+  <div id="errorBanner" class="error-banner"></div>
+  <div id="okBanner" class="ok-note"></div>
+
+  <div class="page-head">
+    <div class="page-title" id="pageTitle">Тендер</div>
+    <span class="law-badge" id="lawBadge" style="display:none"></span>
+  </div>
+
+  <!-- АВТОЗАПОЛНЕНИЕ (только режим создания) -->
+  <div class="card form-card" id="lookupCard" style="display:none">
+    <div class="form-section-title">Автозаполнение по номеру закупки</div>
+    <div class="lookup-row">
+      <input type="text" class="form-input" id="lookupNumber"
+             placeholder="11 цифр (223-ФЗ), 19 цифр (44-ФЗ) или номер площадки (SBR003-...)">
+      <div class="spinner" id="lookupSpinner"></div>
+      <button type="button" class="btn-primary" id="btnLookup">Найти</button>
+    </div>
+    <div class="warn-banner" id="lookupBanner">
+      <span id="lookupBannerText"></span>
+      <button type="button" class="btn-outline btn-sm" id="btnRetry">Повторить</button>
+    </div>
+    <div class="ok-note" id="lookupOk"></div>
+  </div>
+
+  <div id="tenderForm">
+
+    <!-- ЗАКУПКА -->
+    <div class="card form-card">
+      <div class="form-section-title">Закупка</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_notice_number">Номер закупки</label>
+          <input type="text" class="form-input" id="f_notice_number">
+        </div>
+        <div>
+          <label class="form-label" for="f_platform">Площадка <a class="platform-open" id="platformOpen" target="_blank" rel="noopener" title="Открыть сайт площадки" style="display:none">↗</a></label>
+          <input type="text" class="form-input" id="f_platform">
+        </div>
+        <div>
+          <label class="form-label" for="f_bidder_company">Подача от компании</label>
+          <select class="form-input" id="f_bidder_company">
+            <option value="">—</option>
+            <option value="ti">ООО "Техноинтеллект"</option>
+            <option value="ntne">ООО "НТНЭ"</option>
+          </select>
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_subject">Предмет закупки</label>
+          <textarea class="form-input" id="f_subject" rows="2"></textarea>
+        </div>
+        <div>
+          <label class="form-label" for="f_customer">Заказчик</label>
+          <input type="text" class="form-input" id="f_customer">
+        </div>
+        <div>
+          <label class="form-label" for="f_customer_inn">ИНН / ОГРН заказчика</label>
+          <div class="lookup-row">
+            <input type="text" class="form-input" id="f_customer_inn" inputmode="numeric">
+            <div class="spinner" id="innSpinner"></div>
+            <button type="button" class="btn-outline btn-sm" id="btnInnLookup" style="display:none">Заполнить по ИНН / ОГРН</button>
+          </div>
+        </div>
+        <div>
+          <label class="form-label" for="f_customer_kpp">КПП заказчика</label>
+          <input type="text" class="form-input" id="f_customer_kpp" inputmode="numeric">
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_customer_address">Юр. адрес заказчика</label>
+          <input type="text" class="form-input" id="f_customer_address">
+        </div>
+        <div class="warn-banner field-full" id="innBanner" style="margin-top:0"><span id="innBannerText"></span></div>
+        <div>
+          <label class="form-label" for="f_customer_contact">Контактное лицо заказчика</label>
+          <input type="text" class="form-input" id="f_customer_contact">
+        </div>
+        <div>
+          <label class="form-label" for="f_customer_phone">Телефон заказчика</label>
+          <input type="tel" class="form-input" id="f_customer_phone">
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_customer_email">Email заказчика</label>
+          <input type="email" class="form-input" id="f_customer_email">
+        </div>
+        <div>
+          <label class="form-label" for="f_customer_ogrn">ОГРН заказчика</label>
+          <input type="text" class="form-input" id="f_customer_ogrn" inputmode="numeric">
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_region">Регион</label>
+          <input type="text" class="form-input" id="f_region">
+        </div>
+      </div>
+    </div>
+
+    <!-- ЦЕНЫ -->
+    <div class="card form-card">
+      <div class="form-section-title">Цены</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_nmck">НМЦК, ₽</label>
+          <input type="text" class="form-input" id="f_nmck" inputmode="decimal">
+        </div>
+        <div>
+          <label class="form-label" for="f_our_price">Наша цена, ₽</label>
+          <input type="text" class="form-input" id="f_our_price" inputmode="decimal">
+        </div>
+        <div>
+          <label class="form-label" for="f_participation_fee">Плата за участие, ₽</label>
+          <input type="text" class="form-input" id="f_participation_fee" inputmode="decimal">
+        </div>
+        <div>
+          <label class="checkbox-row" style="padding-top:26px">
+            <input type="checkbox" id="f_participation_fee_refundable">
+            Плата возвратная
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- ДАТЫ -->
+    <div class="card form-card">
+      <div class="form-section-title">Даты</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_deadline_date">Дедлайн подачи</label>
+          <input type="date" class="form-input" id="f_deadline_date">
+        </div>
+        <div>
+          <label class="form-label" for="f_deadline_time">Время (МСК)</label>
+          <input type="time" class="form-input" id="f_deadline_time">
+        </div>
+      </div>
+    </div>
+
+    <!-- ВОЗНАГРАЖДЕНИЕ -->
+    <div class="card form-card">
+      <div class="form-section-title">Вознаграждение</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_fee_application">Стоимость заявки, ₽</label>
+          <input type="text" class="form-input" id="f_fee_application" inputmode="decimal">
+        </div>
+        <div>
+          <label class="form-label" for="f_fee_bg">Оформление БГ, ₽</label>
+          <input type="text" class="form-input" id="f_fee_bg" inputmode="decimal">
+        </div>
+        <div>
+          <label class="form-label" for="f_fee_accreditation">Аккредитация, ₽</label>
+          <input type="text" class="form-input" id="f_fee_accreditation" inputmode="decimal">
+        </div>
+        <div>
+          <label class="form-label" for="f_fee_percent">Процент, ₽ (авто 2% от нашей цены)</label>
+          <input type="text" class="form-input" id="f_fee_percent" inputmode="decimal">
+        </div>
+        <div class="total-line">
+          <span class="total-label">Итого</span>
+          <span class="total-value" id="feeTotal">0,00 ₽</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- СТАТУС И КОММЕНТАРИЙ -->
+    <div class="card form-card">
+      <div class="form-section-title">Статус и комментарий</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_status">Статус</label>
+          <select class="form-input" id="f_status"></select>
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_comment">Комментарий</label>
+          <textarea class="form-input" id="f_comment" rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- БЛОК БУХГАЛТЕРА -->
+    <div class="card form-card">
+      <div class="form-section-title">Поставка и оплата</div>
+      <div class="form-grid">
+        <div>
+          <label class="form-label" for="f_delivery_term">Срок поставки</label>
+          <input type="text" class="form-input" id="f_delivery_term">
+        </div>
+        <div>
+          <label class="form-label" for="f_shipping_act">Акт отгрузки</label>
+          <input type="text" class="form-input" id="f_shipping_act">
+        </div>
+        <div>
+          <label class="form-label" for="f_receiving">Приёмка</label>
+          <input type="text" class="form-input" id="f_receiving">
+        </div>
+        <div>
+          <label class="form-label" for="f_payment_term">Срок оплаты</label>
+          <input type="text" class="form-input" id="f_payment_term">
+        </div>
+        <div class="field-full">
+          <label class="form-label" for="f_delivery_address">Адрес поставки</label>
+          <input type="text" class="form-input" id="f_delivery_address">
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ДОКУМЕНТЫ (вне #tenderForm: applyRole/lockForm управляют только полями тендера) -->
+  <div class="card form-card" id="docsCard">
+    <div class="form-section-title">Документы</div>
+    <div class="doc-hint" id="docsNewHint" style="display:none">Сохраните тендер, чтобы прикреплять документы</div>
+    <div class="doc-upload accountant-edit" id="docsUpload" style="display:none">
+      <input type="text" class="form-input" id="docTitle" placeholder="Название документа (необязательно)">
+      <input type="file" class="form-input" id="docFile"
+             accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.jpg,.jpeg,.png,.sig">
+      <div class="spinner" id="docSpinner"></div>
+      <button type="button" class="btn-primary btn-sm" id="btnDocUpload">Загрузить</button>
+    </div>
+    <div class="doc-list" id="docsList"></div>
+  </div>
+
+  <!-- КНОПКИ -->
+  <div class="form-actions" id="formActions">
+    <button type="button" class="btn-primary" id="btnSave">Сохранить</button>
+    <a href="index.html" class="btn-outline">Отмена</a>
+    <button type="button" class="btn-danger-lg" id="btnDelete" style="display:none">Удалить</button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var FEE_PERCENT_RATE = 0.02; // стандартное вознаграждение: 2% от нашей цены
+
+  var params = new URLSearchParams(window.location.search);
+  var tenderId = params.get('id');
+  var isNew = params.get('new') === '1';
+
+  var TEXT_FIELDS = ['notice_number', 'subject', 'customer', 'customer_inn', 'customer_kpp',
+    'customer_address', 'customer_contact', 'customer_phone', 'customer_email',
+    'customer_ogrn', 'region', 'platform',
+    'comment', 'delivery_term', 'shipping_act', 'receiving', 'payment_term', 'delivery_address'];
+  var NUM_FIELDS = ['nmck', 'our_price', 'participation_fee'];
+  var FEE_FIELDS = ['fee_application', 'fee_bg', 'fee_accreditation', 'fee_percent'];
+  var DATE_FIELDS = ['deadline_date'];
+  // время дедлайна (Postgres time): fill с обрезкой секунд, collect 'HH:MM'|null
+  var TIME_FIELDS = ['deadline_time'];
+  // поля, доступные бухгалтеру (зеркало триггера tt_guard_accountant_update, 13 полей)
+  var ACC_FIELDS = ['comment', 'customer', 'customer_inn', 'customer_kpp', 'customer_address',
+    'customer_contact', 'customer_phone', 'customer_email',
+    'delivery_term', 'shipping_act', 'receiving', 'payment_term', 'delivery_address'];
+  // поля lookup, по которым решаем auto/partial
+  var LOOKUP_CHECK = ['subject', 'customer', 'customer_ogrn', 'region', 'nmck', 'platform', 'deadline_date', 'deadline_time'];
+  var NUM_LABELS = {
+    nmck: 'НМЦК', our_price: 'Наша цена', participation_fee: 'Плата за участие',
+    fee_application: 'Стоимость заявки', fee_bg: 'Оформление БГ',
+    fee_accreditation: 'Аккредитация', fee_percent: 'Процент'
+  };
+
+  var _role = null;
+  // true = пользователь правил «Процент» руками, авторасчёт 2% отключён.
+  // Ставится только input-событием на f_fee_percent (программная запись .value событие не даёт).
+  var _feePercentManual = false;
+  var _lookupSource = null;
+  var _lookupStatus = null;
+  var _lookupNumber = null; // номер, по которому был успешный lookup
+
+  function $(id) { return document.getElementById(id); }
+  function fld(name) { return $('f_' + name); }
+
+  function showError(msg) {
+    var b = $('errorBanner');
+    b.textContent = msg;
+    b.style.display = 'block';
+    window.scrollTo(0, 0);
+  }
+  function hideError() { $('errorBanner').style.display = 'none'; }
+
+  function showOk(msg) {
+    var b = $('okBanner');
+    b.textContent = msg;
+    b.style.display = 'block';
+    window.scrollTo(0, 0);
+  }
+  function hideOk() { $('okBanner').style.display = 'none'; }
+
+  // ═══ ЗАКОН-БЕЙДЖ ═══
+  function updateLawBadge() {
+    var el = $('lawBadge');
+    if (!fld('notice_number').value.trim()) { el.style.display = 'none'; return; }
+    // 'other' (номер площадки) -> «—»
+    el.textContent = Common.lawLabel(Common.lawByNumber(fld('notice_number').value));
+    el.style.display = 'inline-block';
+  }
+
+  // ═══ ССЫЛКА НА САЙТ ПЛОЩАДКИ ═══
+  // «↗» видна только когда platformUrl(значение поля) не null. Чисто отображение, в БД не пишется.
+  function updatePlatformOpen() {
+    var a = $('platformOpen');
+    var url = Common.platformUrl(fld('platform').value);
+    if (url) { a.href = url; a.style.display = 'inline'; }
+    else { a.removeAttribute('href'); a.style.display = 'none'; }
+  }
+
+  // ═══ LIVE-ИТОГО (в БД total - generated, тут просто текст) ═══
+  function updateTotal() {
+    var sum = 0, hasBad = false;
+    FEE_FIELDS.forEach(function (f) {
+      var v = Common.parseDecimal(fld(f).value);
+      if (v === null) return;
+      if (isNaN(v)) { hasBad = true; return; }
+      sum += v;
+    });
+    $('feeTotal').textContent = Common.fmtMoney(sum) + (hasBad ? ' (есть нечисловые значения)' : '');
+  }
+
+  // ═══ АВТОРАСЧЁТ «ПРОЦЕНТ» = 2% ОТ НАШЕЙ ЦЕНЫ ═══
+  function feePercentOf(price) { return Math.round(price * FEE_PERCENT_RATE * 100) / 100; }
+
+  // Вызывается input-событием на f_our_price. Программная запись цены (fill/lookup)
+  // событие не даёт и пересчёт не запускает - это осознанно: fill показывает БД как есть,
+  // а lookup поле our_price не заполняет вовсе.
+  function recalcFeePercent() {
+    if (_feePercentManual) { updateTotal(); return; }
+    var v = Common.parseDecimal(fld('our_price').value);
+    // запись как в fill(): String(число), десятичный разделитель - точка
+    fld('fee_percent').value = (v === null || isNaN(v)) ? '' : String(feePercentOf(v));
+    updateTotal();
+  }
+
+  // ═══ СТАТУСЫ ═══
+  function buildStatusSelect() {
+    fld('status').innerHTML = Common.STATUS_ORDER.map(function (code) {
+      return '<option value="' + code + '">' + Common.esc(Common.statusInfo(code).label) + '</option>';
+    }).join('');
+  }
+
+  // ═══ РОЛИ ═══
+  function applyRole() {
+    $('formActions').style.display = _role === 'viewer' ? 'none' : '';
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#tenderForm input, #tenderForm select, #tenderForm textarea'),
+      function (el) {
+        var name = el.id.replace(/^f_/, '');
+        el.disabled = !(_role === 'owner' || (_role === 'accountant' && ACC_FIELDS.indexOf(name) !== -1));
+      }
+    );
+    if (_role === 'owner' && tenderId) $('btnDelete').style.display = '';
+    // «Заполнить по ИНН» - owner и accountant, для viewer скрыта
+    $('btnInnLookup').style.display =
+      (_role === 'owner' || _role === 'accountant') ? '' : 'none';
+  }
+
+  // Блокировка формы до успешной загрузки тендера (защита от затирания данных)
+  function lockForm() {
+    $('formActions').style.display = 'none';
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#tenderForm input, #tenderForm select, #tenderForm textarea'),
+      function (el) { el.disabled = true; }
+    );
+  }
+
+  // ═══ ЗАПОЛНЕНИЕ ФОРМЫ ИЗ БД ═══
+  function fill(t) {
+    TEXT_FIELDS.concat(DATE_FIELDS).forEach(function (f) {
+      fld(f).value = t[f] == null ? '' : String(t[f]);
+    });
+    NUM_FIELDS.concat(FEE_FIELDS).forEach(function (f) {
+      fld(f).value = t[f] == null ? '' : String(t[f]);
+    });
+    // Postgres time отдаёт 'HH:MM:SS' - input type=time держим в 'HH:MM'
+    TIME_FIELDS.forEach(function (f) {
+      fld(f).value = t[f] ? String(t[f]).slice(0, 5) : '';
+    });
+    // select «Подача от компании»: код БД или '' (null у старых тендеров)
+    fld('bidder_company').value = t.bidder_company || '';
+    fld('participation_fee_refundable').checked = !!t.participation_fee_refundable;
+    // режим авторасчёта процента: если в БД fee_percent ровно 2% от our_price
+    // (или оба «пустые»: цены нет, процент 0/null) - авто; иначе считаем ручным,
+    // чтобы правка цены не затёрла нестандартный процент старого тендера.
+    var _op = Common.parseDecimal(fld('our_price').value);
+    var _fp = Common.parseDecimal(fld('fee_percent').value);
+    if (_op !== null && !isNaN(_op)) {
+      _feePercentManual = !(_fp !== null && !isNaN(_fp) && _fp === feePercentOf(_op));
+    } else {
+      _feePercentManual = !(_fp === null || _fp === 0);
+    }
+    fld('status').value = t.status || 'preparing';
+    $('pageTitle').textContent = 'Тендер ' + (t.notice_number || '');
+    updateLawBadge();
+    updateTotal();
+    updatePlatformOpen();
+  }
+
+  // ═══ АВТОЗАПОЛНЕНИЕ ═══
+  // русские подписи полей lookup для confirm в edit-режиме
+  var LOOKUP_LABELS = {
+    subject: 'Предмет', customer: 'Заказчик', customer_ogrn: 'ОГРН',
+    region: 'Регион', nmck: 'НМЦК', platform: 'Площадка', deadline_date: 'Дедлайн подачи',
+    deadline_time: 'Время дедлайна (МСК)'
+  };
+
+  // edit-режим (owner): пустые поля заполняем сразу, непустые с другим значением -
+  // один confirm со списком «Поле: старое → новое». confirm - plain text, в DOM не попадает.
+  function mergeLookupIntoForm(d) {
+    var conflicts = []; // { field, incoming, line }
+    LOOKUP_CHECK.forEach(function (f) {
+      var incoming;
+      if (f === 'deadline_date') incoming = d.deadline_date ? String(d.deadline_date).slice(0, 10) : null;
+      else if (f === 'deadline_time') incoming = d.deadline_time ? String(d.deadline_time).slice(0, 5) : null;
+      else incoming = d[f] != null ? String(d[f]) : null;
+      if (incoming === null) return;
+      var cur = fld(f).value.trim();
+      if (!cur) { fld(f).value = incoming; return; } // пустое - заполняем сразу
+      var same, curDisp = cur, newDisp = incoming;
+      if (f === 'nmck') {
+        var curN = Common.parseDecimal(cur), newN = Common.parseDecimal(incoming);
+        same = curN !== null && !isNaN(curN) && curN === newN;
+        curDisp = Common.fmtMoney(curN);
+        newDisp = Common.fmtMoney(newN);
+      } else if (f === 'deadline_date') {
+        same = cur === incoming;
+        curDisp = Common.fmtDate(cur);
+        newDisp = Common.fmtDate(incoming);
+      } else if (f === 'deadline_time') {
+        // сравнение по 'HH:MM' (обрезаем возможные секунды)
+        curDisp = cur.slice(0, 5);
+        same = curDisp === incoming;
+      } else {
+        same = cur === incoming;
+      }
+      if (same) return; // то же значение - не трогаем
+      conflicts.push({ field: f, incoming: incoming, line: LOOKUP_LABELS[f] + ': ' + curDisp + ' → ' + newDisp });
+    });
+    if (!conflicts.length) return;
+    if (confirm('Заменить заполненные поля данными из закупки?\n\n' +
+        conflicts.map(function (c) { return c.line; }).join('\n'))) {
+      conflicts.forEach(function (c) { fld(c.field).value = c.incoming; });
+    }
+  }
+
+  function setLookupBusy(busy) {
+    $('btnLookup').disabled = busy;
+    $('lookupSpinner').style.display = busy ? 'inline-block' : 'none';
+  }
+  function showLookupBanner(msg, canRetry) {
+    $('lookupBannerText').textContent = msg;
+    $('btnRetry').style.display = canRetry ? '' : 'none';
+    $('lookupBanner').style.display = 'flex';
+  }
+  function doLookup() {
+    var num = $('lookupNumber').value.trim();
+    $('lookupBanner').style.display = 'none';
+    $('lookupOk').style.display = 'none';
+    if (!num) { showLookupBanner('Введите номер закупки', false); return; }
+    // Зеркало серверной валидации: strip пробелов/№, дефисы и буквы сохраняются;
+    // 11/19 цифр (223/44-ФЗ) или номер площадки [буквы/цифры/дефис]{4,30}.
+    var cleaned = num.replace(/[\s№]/g, '');
+    if (!/^(\d{11}|\d{19})$/.test(cleaned) && !/^[A-Za-zА-Яа-я0-9-]{4,30}$/.test(cleaned)) {
+      showLookupBanner('Неверный номер: 11/19 цифр или номер площадки (буквы, цифры, дефис)', false);
+      return;
+    }
+    setLookupBusy(true);
+    Common.lookupTender(num).then(function (resp) {
+      setLookupBusy(false);
+      if (!resp || resp.ok === false) {
+        showLookupBanner('Автопоиск недоступен, заполните вручную', true);
+        return;
+      }
+      if (!resp.found) {
+        showLookupBanner('Закупка не найдена - заполните форму вручную', false);
+        return;
+      }
+      var d = resp.data || {};
+      // данные lookup - только в .value инпутов, не в innerHTML
+      if (isNew) {
+        // режим создания: заполнение прямое
+        fld('notice_number').value = d.number != null ? String(d.number) : num;
+        ['subject', 'customer', 'customer_ogrn', 'region', 'platform'].forEach(function (f) {
+          if (d[f] != null) fld(f).value = String(d[f]);
+        });
+        if (d.nmck != null) fld('nmck').value = String(d.nmck);
+        if (d.deadline_date) fld('deadline_date').value = String(d.deadline_date).slice(0, 10);
+        if (d.deadline_time) fld('deadline_time').value = String(d.deadline_time).slice(0, 5);
+        _lookupNumber = fld('notice_number').value.trim();
+      } else {
+        // режим редактирования: пустые - сразу, конфликты - через confirm
+        mergeLookupIntoForm(d);
+        _lookupNumber = num;
+      }
+      var partial = LOOKUP_CHECK.some(function (f) { return d[f] == null; });
+      _lookupStatus = partial ? 'partial' : 'auto';
+      _lookupSource = resp;
+      updateLawBadge();
+      updateTotal();
+      updatePlatformOpen(); // lookup мог заполнить площадку без события input
+      $('lookupOk').textContent = partial
+        ? 'Данные заполнены частично - дополните недостающие поля и сохраните'
+        : 'Данные заполнены - проверьте, дополните при необходимости и сохраните';
+      $('lookupOk').style.display = 'block';
+      autoFillByOgrn();
+    }).catch(function (e) {
+      setLookupBusy(false);
+      showLookupBanner(e.message || 'Автопоиск недоступен, заполните вручную', true);
+    });
+  }
+
+  // Второй шаг автоцепочки: после успешного поиска по номеру тихо подтягиваем
+  // реквизиты по ОГРН (фактическое значение поля - в edit юзер мог отменить замену).
+  // Заполняем ТОЛЬКО пустые из inn/kpp/address, без confirm. Ошибки шага не ломают
+  // успех первого - мягкий текст в innBanner. doLookup отсюда не вызывается - цикла нет.
+  function autoFillByOgrn() {
+    var ogrn = fld('customer_ogrn').value.trim();
+    if (!ogrn) return;
+    var needs = ['customer_inn', 'customer_kpp', 'customer_address'].some(function (f) {
+      return !fld(f).value.trim();
+    });
+    if (!needs) return;
+    $('innBanner').style.display = 'none';
+    setInnBusy(true);
+    Common.lookupInn(ogrn).then(function (resp) {
+      setInnBusy(false);
+      if (!resp || !resp.found) {
+        showInnBanner('Реквизиты по ОГРН не подтянулись: не найдено в ЕГРЮЛ');
+        return;
+      }
+      var d = resp.data || {};
+      // данные DaData - только в .value; f_customer_inn из d.inn (канонический ИНН)
+      if (d.inn != null && !fld('customer_inn').value.trim()) fld('customer_inn').value = String(d.inn);
+      if (d.kpp != null && !fld('customer_kpp').value.trim()) fld('customer_kpp').value = String(d.kpp);
+      if (d.address != null && !fld('customer_address').value.trim()) fld('customer_address').value = String(d.address);
+      if (d.status && d.status !== 'ACTIVE') {
+        showInnBanner('Внимание: организация в статусе ' + d.status);
+      }
+    }).catch(function (e) {
+      setInnBusy(false);
+      showInnBanner('Реквизиты по ОГРН не подтянулись: ' + (e.message || 'сервис недоступен'));
+    });
+  }
+
+  // ═══ АВТОЗАПОЛНЕНИЕ РЕКВИЗИТОВ ПО ИНН (DaData) ═══
+  function setInnBusy(busy) {
+    $('btnInnLookup').disabled = busy;
+    $('innSpinner').style.display = busy ? 'inline-block' : 'none';
+  }
+  function showInnBanner(msg) {
+    $('innBannerText').textContent = msg;
+    $('innBanner').style.display = 'flex';
+  }
+  function doInnLookup() {
+    hideError();
+    $('innBanner').style.display = 'none';
+    setInnBusy(true);
+    Common.lookupInn(fld('customer_inn').value.trim()).then(function (resp) {
+      setInnBusy(false);
+      if (!resp || !resp.found) { showInnBanner('ИНН или ОГРН не найден в ЕГРЮЛ'); return; }
+      var d = resp.data || {};
+      // данные DaData - только в .value, никакого innerHTML
+      if (d.name != null) {
+        var cur = fld('customer').value.trim();
+        if (!cur || cur === String(d.name) ||
+            confirm('Заменить заказчика «' + cur + '» на «' + d.name + '»?')) {
+          fld('customer').value = String(d.name);
+        }
+      }
+      // если искали по ОГРН - в поле ИНН пишем канонический ИНН из ответа
+      if (d.inn != null) fld('customer_inn').value = String(d.inn);
+      if (d.ogrn != null) fld('customer_ogrn').value = String(d.ogrn);
+      if (d.kpp != null) fld('customer_kpp').value = String(d.kpp);
+      if (d.address != null) fld('customer_address').value = String(d.address);
+      if (d.status && d.status !== 'ACTIVE') {
+        showInnBanner('Внимание: организация в статусе ' + d.status);
+      }
+    }).catch(function (e) {
+      setInnBusy(false);
+      showError(e.message || 'Сервис реквизитов недоступен');
+    });
+  }
+
+  // ═══ СБОР ОБЪЕКТА ДЛЯ СОХРАНЕНИЯ ═══
+  function collect() {
+    var rec = {};
+    if (_role === 'accountant') {
+      // бухгалтер шлёт ТОЛЬКО свои поля + id (иначе триггер БД отобьёт)
+      rec.id = tenderId;
+      ACC_FIELDS.forEach(function (f) { rec[f] = fld(f).value.trim() || null; });
+      return rec;
+    }
+    // owner
+    var num = fld('notice_number').value.trim();
+    if (!num) throw new Error('Укажите номер закупки');
+    rec.notice_number = num;
+    rec.law = Common.lawByNumber(num);
+    TEXT_FIELDS.forEach(function (f) {
+      if (f !== 'notice_number') rec[f] = fld(f).value.trim() || null;
+    });
+    NUM_FIELDS.forEach(function (f) {
+      var v = Common.parseDecimal(fld(f).value);
+      if (v !== null && isNaN(v)) throw new Error('Некорректное число в поле «' + NUM_LABELS[f] + '»');
+      rec[f] = v;
+    });
+    FEE_FIELDS.forEach(function (f) {
+      var v = Common.parseDecimal(fld(f).value);
+      if (v !== null && isNaN(v)) throw new Error('Некорректное число в поле «' + NUM_LABELS[f] + '»');
+      rec[f] = v === null ? 0 : v; // в БД NOT NULL default 0
+    });
+    DATE_FIELDS.forEach(function (f) { rec[f] = fld(f).value || null; });
+    TIME_FIELDS.forEach(function (f) { rec[f] = fld(f).value || null; }); // input type=time отдаёт 'HH:MM'
+    rec.participation_fee_refundable = fld('participation_fee_refundable').checked;
+    rec.status = fld('status').value;
+    rec.bidder_company = fld('bidder_company').value || null; // пустой option '' → null
+    if (isNew) {
+      rec.lookup_status = _lookupStatus || 'manual';
+      if (_lookupSource) rec.lookup_source = _lookupSource;
+    } else if (_lookupSource) {
+      // owner обновил данные по номеру в режиме редактирования - фиксируем аудит-метки
+      rec.lookup_status = _lookupStatus || 'manual';
+      rec.lookup_source = _lookupSource;
+    }
+    if (tenderId) rec.id = tenderId;
+    return rec;
+  }
+
+  /* ═══ СВЕРКА ПОСЛЕ ТАЙМАУТА ═══
+     Канал до Supabase может проглотить ответ уже применённой записи. Поля для
+     сверки - только те, что реально уходили в rec (у бухгалтера их всего два). */
+  var VERIFY_NUM = ['our_price', 'nmck', 'participation_fee',
+    'fee_application', 'fee_bg', 'fee_accreditation', 'fee_percent'];
+  var VERIFY_TXT = ['notice_number', 'status', 'comment', 'customer', 'deadline_date'];
+
+  // null / undefined / '' - одно и то же «пусто»
+  function sameNum(a, b) {
+    var na = (a === null || a === undefined || a === ''), nb = (b === null || b === undefined || b === '');
+    if (na || nb) return na && nb;
+    return Number(a) === Number(b);
+  }
+  function sameTxt(a, b) {
+    var sa = (a === null || a === undefined) ? '' : String(a).trim();
+    var sb = (b === null || b === undefined) ? '' : String(b).trim();
+    return sa === sb;
+  }
+
+  function recApplied(row, rec) {
+    if (!row) return false;
+    var ok = true;
+    VERIFY_NUM.forEach(function (f) {
+      if (rec[f] === undefined) return;
+      if (!sameNum(row[f], rec[f])) ok = false;
+    });
+    VERIFY_TXT.forEach(function (f) {
+      if (rec[f] === undefined) return;
+      if (!sameTxt(row[f], rec[f])) ok = false;
+    });
+    return ok;
+  }
+
+  // Перечитывание: правка - по id, новый тендер - поиск по номеру закупки (он уникален)
+  function readBack(rec) {
+    if (rec.id) return Common.getTender(rec.id);
+    return Common.listTenders().then(function (rows) {
+      var list = rows || [];
+      for (var i = 0; i < list.length; i++) {
+        if (sameTxt(list[i].notice_number, rec.notice_number)) return list[i];
+      }
+      return null;
+    });
+  }
+
+  // ═══ СОХРАНЕНИЕ (после успеха - на дашборд) ═══
+  function save() {
+    hideError();
+    hideOk();
+    var rec;
+    try { rec = collect(); } catch (e) { showError(e.message); return; }
+    var btn = $('btnSave');
+    btn.disabled = true;
+    btn.textContent = 'Сохранение...';
+    Common.saveTender(rec).then(function () {
+      window.location.href = 'index.html';
+    }).catch(function (e) {
+      // Таймаут - не отказ: запись могла примениться. Сверяем факт, а не пугаем красным.
+      if (Common.isTimeout(e)) { confirmSave(rec, btn); return; }
+      saveFailed(btn, e);
+    });
+  }
+
+  function confirmSave(rec, btn) {
+    btn.textContent = 'Проверяем...';
+    Common.confirmAfterTimeout(function () {
+      return readBack(rec).then(function (row) { return recApplied(row, rec); });
+    }).then(function (ok) {
+      if (ok) {
+        showOk('Сохранено');
+        window.location.href = 'index.html';
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = 'Сохранить';
+      showError('Не удалось подтвердить сохранение, проверьте данные и повторите');
+    });
+  }
+
+  function saveFailed(btn, e) {
+    btn.disabled = false;
+    btn.textContent = 'Сохранить';
+    var msg = e.message || 'Ошибка запроса';
+    if (msg.indexOf('accountant may edit only') !== -1) {
+      msg = 'Бухгалтеру доступны только: заказчик, комментарий и блок «Поставка и оплата»';
+    } else if (msg.indexOf('duplicate key') !== -1) {
+      msg = 'Тендер с таким номером закупки уже есть';
+    }
+    showError('Не удалось сохранить: ' + msg);
+  }
+
+  // ═══ УДАЛЕНИЕ (owner) ═══
+  function del() {
+    var num = fld('notice_number').value.trim();
+    if (!confirm('Удалить тендер ' + (num || '') + '? Действие необратимо.')) return;
+    var btn = $('btnDelete');
+    btn.disabled = true;
+    hideOk();
+    Common.deleteTender(tenderId).then(function () {
+      window.location.href = 'index.html';
+    }).catch(function (e) {
+      // Таймаут - запись могла уже исчезнуть; проверяем, прежде чем ругаться
+      if (Common.isTimeout(e)) { confirmDelete(btn); return; }
+      btn.disabled = false;
+      showError('Не удалось удалить: ' + e.message);
+    });
+  }
+
+  function confirmDelete(btn) {
+    Common.confirmAfterTimeout(function () {
+      return Common.getTender(tenderId).then(
+        function () { return false; },  // запись на месте - удаление не прошло
+        function (err) { return /не найден/i.test((err && err.message) || ''); }
+      );
+    }).then(function (gone) {
+      if (gone) { window.location.href = 'index.html'; return; }
+      btn.disabled = false;
+      showError('Не удалось подтвердить удаление - обновите страницу и проверьте список');
+    });
+  }
+
+  // ═══ ДОКУМЕНТЫ ═══
+  // Секция живёт вне #tenderForm: её видимость решают роль и наличие id тендера,
+  // а не applyRole/lockForm (те заведуют только полями самого тендера).
+  var _docs = [];
+
+  function findDoc(id) {
+    for (var i = 0; i < _docs.length; i++) {
+      if (String(_docs[i].id) === String(id)) return _docs[i];
+    }
+    return null;
+  }
+
+  function renderDocs() {
+    var wrap = $('docsList');
+    if (!_docs.length) {
+      wrap.innerHTML = '<div class="doc-empty">Документов пока нет</div>';
+      return;
+    }
+    // название и имя файла - пользовательские данные, поэтому esc и в тексте, и в title
+    wrap.innerHTML = _docs.map(function (d) {
+      var name = d.title || d.file_name; // старые строки без title показываются по имени файла
+      var meta = Common.fmtSize(d.file_size) + ' · ' + Common.fmtDate(d.created_at);
+      if (d.title && d.title !== d.file_name) meta = Common.esc(d.file_name) + ' · ' + meta;
+      return '<div class="doc-row">' +
+        '<span class="doc-icon">' + Common.docIcon(d.file_name) + '</span>' +
+        '<div class="doc-main">' +
+          '<div class="doc-name" title="' + Common.esc(name) + '">' + Common.esc(name) + '</div>' +
+          '<div class="doc-meta">' + meta + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn-outline btn-sm doc-dl" data-id="' + Common.esc(d.id) + '">Скачать</button>' +
+        '<button type="button" class="btn-danger doc-del accountant-edit" data-id="' + Common.esc(d.id) + '">Удалить</button>' +
+        '</div>';
+    }).join('');
+    Array.prototype.forEach.call(wrap.querySelectorAll('.doc-dl'), function (btn) {
+      btn.addEventListener('click', function () { downloadDoc(btn.getAttribute('data-id'), btn); });
+    });
+    Array.prototype.forEach.call(wrap.querySelectorAll('.doc-del'), function (btn) {
+      btn.addEventListener('click', function () { deleteDoc(btn.getAttribute('data-id'), btn); });
+    });
+  }
+
+  // Бакет приватный: ссылка выдаётся по клику и живёт 300с.
+  // Вкладку открываем синхронно (в жесте клика), иначе её съест блокировщик.
+  function downloadDoc(id, btn) {
+    var d = findDoc(id);
+    if (!d) return;
+    hideError();
+    var w = window.open('', '_blank');
+    btn.disabled = true;
+    Common.getDocumentUrl(d.storage_path).then(function (url) {
+      btn.disabled = false;
+      if (w) w.location.href = url; else window.location.href = url;
+    }).catch(function (e) {
+      btn.disabled = false;
+      if (w) w.close();
+      showError('Не удалось получить ссылку на файл: ' + e.message);
+    });
+  }
+
+  function deleteDoc(id, btn) {
+    var d = findDoc(id);
+    if (!d) return;
+    if (!confirm('Удалить документ «' + d.file_name + '»? Действие необратимо.')) return;
+    hideError();
+    btn.disabled = true;
+    Common.deleteDocument(d).then(function () {
+      _docs = _docs.filter(function (x) { return String(x.id) !== String(d.id); });
+      renderDocs();
+    }).catch(function (e) {
+      btn.disabled = false;
+      showError('Не удалось удалить документ: ' + e.message);
+    });
+  }
+
+  function setDocBusy(busy) {
+    $('btnDocUpload').disabled = busy;
+    $('docFile').disabled = busy;
+    $('docTitle').disabled = busy;
+    $('docSpinner').style.display = busy ? 'inline-block' : 'none';
+  }
+
+  function doDocUpload() {
+    hideError();
+    var input = $('docFile');
+    var file = input.files && input.files[0];
+    if (!file) { showError('Выберите файл для загрузки'); return; }
+    setDocBusy(true);
+    Common.uploadDocument(tenderId, file, $('docTitle').value).then(function (row) {
+      setDocBusy(false);
+      input.value = '';
+      $('docTitle').value = '';
+      _docs.push(row);
+      renderDocs();
+    }).catch(function (e) {
+      setDocBusy(false);
+      showError('Не удалось загрузить документ: ' + e.message);
+    });
+  }
+
+  function initDocs() {
+    if (isNew) {
+      // файлов без id тендера быть не может
+      $('docsNewHint').style.display = '';
+      return;
+    }
+    // .accountant-edit в styles.css скрывает блок у viewer; запрет по факту - RLS
+    $('docsUpload').style.display = '';
+    $('docsList').innerHTML = '<div class="doc-empty">Загрузка...</div>';
+    Common.listDocuments(tenderId).then(function (rows) {
+      _docs = rows || [];
+      renderDocs();
+    }).catch(function (e) {
+      $('docsList').innerHTML = '';
+      showError('Не удалось загрузить документы: ' + e.message);
+    });
+  }
+
+  // ═══ СТАРТ ═══
+  function init() {
+    var user = Auth.getUser();
+    if (user) $('userName').textContent = user.display_name || user.email || '';
+    _role = Auth.getRole();
+
+    if (isNew && _role !== 'owner') { window.location.replace('index.html'); return; }
+    if (!isNew && !tenderId) { window.location.replace('index.html'); return; }
+
+    buildStatusSelect();
+
+    if (isNew) {
+      $('pageTitle').textContent = 'Новый тендер';
+      $('lookupCard').style.display = '';
+      applyRole();
+      updateTotal();
+      initDocs();
+    } else {
+      initDocs(); // не зависит от загрузки самого тендера
+      lockForm(); // до успешной загрузки форма заблокирована
+      Common.getTender(tenderId).then(function (t) {
+        fill(t);
+        applyRole();
+        // «Обновить по номеру» - только owner и только после успешной загрузки
+        if (_role === 'owner') {
+          $('btnLookup').textContent = 'Обновить по номеру';
+          $('lookupNumber').value = t.notice_number || '';
+          $('lookupCard').style.display = '';
+        }
+      }).catch(function (e) {
+        showError('Не удалось загрузить тендер: ' + e.message);
+        // форма остаётся заблокированной
+      });
+    }
+  }
+
+  fld('notice_number').addEventListener('input', function () {
+    updateLawBadge();
+    // номер изменили вручную после успешного lookup - данные больше не «auto»
+    if (_lookupSource && fld('notice_number').value.trim() !== _lookupNumber) {
+      _lookupStatus = 'manual';
+      _lookupSource = null;
+    }
+  });
+  fld('platform').addEventListener('input', updatePlatformOpen);
+  FEE_FIELDS.forEach(function (f) { fld(f).addEventListener('input', updateTotal); });
+  fld('our_price').addEventListener('input', recalcFeePercent);
+  // ручная правка процента отключает авторасчёт; полная очистка поля возвращает авторежим
+  fld('fee_percent').addEventListener('input', function () {
+    _feePercentManual = fld('fee_percent').value.trim() !== '';
+  });
+  $('btnSave').addEventListener('click', save);
+  $('btnDelete').addEventListener('click', del);
+  $('btnLookup').addEventListener('click', doLookup);
+  $('btnRetry').addEventListener('click', doLookup);
+  $('btnInnLookup').addEventListener('click', doInnLookup);
+  $('btnDocUpload').addEventListener('click', doDocUpload);
+  $('lookupNumber').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); doLookup(); }
+  });
+
+  if (window.Auth && Auth.isReady) init();
+  else document.addEventListener('auth-ready', init);
+})();
+</script>
+
+</body>
+</html>
