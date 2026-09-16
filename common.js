@@ -556,7 +556,11 @@
         rej(new Error('Сервер не ответил за ' + Math.round(timeoutMs / 1000) + ' секунд - проверьте интернет и повторите'));
       }, timeoutMs);
     });
-    return Promise.race([Promise.resolve().then(factory), timeout]).then(function (r) {
+    var op = Promise.resolve().then(factory);
+    // Race проиграл таймауту, а запрос позже упал (например, оборван при уходе
+    // со страницы) — глушим, иначе reject уйдёт в window.unhandledrejection
+    op.then(null, function (e) { _diag(label + ':late-fail', (e && e.message) || String(e)); });
+    return Promise.race([op, timeout]).then(function (r) {
       clearTimeout(timer);
       if (r && r.error) {
         var m = _storageMsg(r.error.message);

@@ -316,6 +316,18 @@
   }
   function hideOk() { $('okBanner').style.display = 'none'; }
 
+  // Необработанный reject — в баннер, как на index/balance. Исключение —
+  // AbortError: просочившийся обрыв проигравшего hedge-канала (или внутренний
+  // промис браузера/supabase-js), не ошибка для пользователя.
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    if (r && (r.name === 'AbortError' || /abort/i.test(r.message || ''))) {
+      if (window.TTDiag) TTDiag.log('abort:leaked', r.message || String(r));
+      return;
+    }
+    showError('Ошибка запроса: ' + ((r && r.message) || r || 'неизвестно'));
+  });
+
   // ═══ ЗАКОН-БЕЙДЖ ═══
   function updateLawBadge() {
     var el = $('lawBadge');

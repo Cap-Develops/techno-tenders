@@ -108,10 +108,16 @@
   }
 
   // Диагностика: любая необработанная ошибка страницы — текстом в баннер.
-  // AbortError проигравшего hedge-канала сюда не доходит — гасится в common.js/auth.js.
+  // Исключение — AbortError: это просочившийся обрыв проигравшего hedge-канала
+  // (или внутренний промис браузера/supabase-js), не ошибка для пользователя.
   window.addEventListener('error', function (e) { showError('Ошибка страницы: ' + e.message); });
   window.addEventListener('unhandledrejection', function (e) {
-    showError('Ошибка запроса: ' + ((e.reason && e.reason.message) || e.reason || 'неизвестно'));
+    var r = e.reason;
+    if (r && (r.name === 'AbortError' || /abort/i.test(r.message || ''))) {
+      diag('abort:leaked', r.message || String(r));
+      return;
+    }
+    showError('Ошибка запроса: ' + ((r && r.message) || r || 'неизвестно'));
   });
 
   function todayIso() {

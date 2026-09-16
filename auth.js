@@ -1,13 +1,31 @@
 /* Учёт тендеров — защита страниц.
    Адаптация kp_project/auth.js: роль из tt_users, без presence. */
 (function () {
-  // Весь трафик к Supabase идёт через прокси нашего же домена (/sb → rewrite
-  // на Vercel): браузер общается только с techno-tenders.new--project.ru,
-  // зарубежный участок проходит по каналу Vercel↔AWS. Прямой URL - только
-  // для локальной разработки (http/localhost, где rewrite не работает).
-  // Прокси к Supabase на Netlify (newproject-sb): без него Chrome в РФ лезет к Cloudflare по QUIC,
-  // который провайдеры режут - запросы висят и падают по таймауту (2026-09-16). Netlify h3 не объявляет.
-  var SUPA_URL = 'https://newproject-sb.netlify.app';
+  /* ═══ Выбор базы Supabase: прокси или прямой URL ═══
+     Разным машинам нужны РАЗНЫЕ пути: у одних провайдер душит netlify.app
+     (прокси), у других режет QUIC к Cloudflare (прямой supabase.co).
+     Кандидаты в порядке приоритета: прокси Netlify (дефолт, 2026-09-16),
+     затем прямой URL. Выбранная база запоминается в localStorage tt_base:
+     на старте берётся мгновенно (нулевая задержка), а параллельно в фоне
+     probe проверяет, жива ли она — мёртвый кеш при живой второй базе
+     перезаписывается (+ один reload, пока страница не загрузила данные).
+     Без кеша обе базы пробуются наперегонки GET /auth/v1/health (c apikey:
+     на обеих отдаёт 200, а любой статус <500 = канал жив). Обе мертвы →
+     прокси (дефолт), ключ не пишется — дальше сработает обычный экран
+     «Сервер недоступен + Повторить». Локальная разработка (не-https) —
+     прямой URL без probe. Компактная копия этой логики живёт в login.html
+     (он не подключает auth.js) — менять синхронно. */
+  var SUPA_BASES = [
+    'https://newproject-sb.netlify.app',        // прокси Netlify (дефолт)
+    'https://uclzyzztoripulpcpshp.supabase.co'  // прямой URL
+  ];
+  var BASE_KEY = 'tt_base';
+  var BASE_RELOAD_FLAG = 'tt_base_reloaded'; // sessionStorage: reload на живую базу максимум один раз
+  var PROBE_TIMEOUT_MS = 2500;
+  /* Ключ сессии ФИКСИРОВАН: дефолт supabase-js — sb-<хост базы>-auth-token,
+     т.е. при смене базы сессия «терялась» бы. Значение равно старому дефолту
+     прокси, чтобы существующие сессии пережили этот деплой. */
+  var STORAGE_KEY = 'sb-newproject-sb-auth-token';
   var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjbHp5enp0b3JpcHVscGNwc2hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODIyNzMsImV4cCI6MjA5MjM1ODI3M30.rX-WT1WdZiwRakVcUEkcg-_dnWzfU49LvgTNHYgBYQ0';
 
   var _sb = null;
@@ -256,10 +274,101 @@
     else hedgeTimer = setTimeout(_startRpc, delay);
   }
 
+  /* ═══ Probe и выбор базы (см. комментарий у SUPA_BASES) ═══ */
+
+  // Канал жив = любой ответ со статусом <500 за PROBE_TIMEOUT_MS
+  function _probe(base) {
+    return new Promise(function (resolve, reject) {
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); reject(new Error('таймаут ' + PROBE_TIMEOUT_MS + 'мс')); }, PROBE_TIMEOUT_MS);
+      fetch(base + '/auth/v1/health', { headers: { apikey: ANON }, signal: ctrl.signal, cache: 'no-store' })
+        .then(function (r) {
+          clearTimeout(timer);
+          if (r.status < 500) resolve(base);
+          else reject(new Error('status ' + r.status));
+        }, function (e) {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
+  }
+
+  // Обе базы наперегонки; победитель — первый живой ответ; обе мертвы → null
+  function _probeFirst() {
+    return new Promise(function (resolve) {
+      var left = SUPA_BASES.length;
+      var done = false;
+      SUPA_BASES.forEach(function (base) {
+        _probe(base).then(function () {
+          if (done) return;
+          done = true;
+          resolve(base);
+        }, function () {
+          left--;
+          if (!done && left === 0) resolve(null);
+        });
+      });
+    });
+  }
+
+  /* Фоновая проверка кешированной базы: мертва при живой второй →
+     перезаписать tt_base; reload — максимум один раз (флаг в sessionStorage)
+     и только пока auth ещё не готов (страница не загрузила данные). */
+  function _recheckBase(cached) {
+    _probe(cached).then(function () {
+      _diag('base:recheck', 'кешированная база жива');
+    }, function (e) {
+      var other = SUPA_BASES[cached === SUPA_BASES[0] ? 1 : 0];
+      _diag('base:recheck', 'кеш мёртв (' + ((e && e.message) || e) + ') — probe ' + other);
+      _probe(other).then(function () {
+        try { localStorage.setItem(BASE_KEY, other); } catch (err) { return; }
+        _diag('base:recheck', 'tt_base → ' + other);
+        var reloaded = null;
+        try { reloaded = sessionStorage.getItem(BASE_RELOAD_FLAG); } catch (err) { reloaded = '1'; } // private mode: без reload, чтобы не зациклиться
+        if (!reloaded && !window.Auth.isReady) {
+          try { sessionStorage.setItem(BASE_RELOAD_FLAG, '1'); } catch (err) { return; }
+          _diag('base:reload', 'перезагрузка на живую базу');
+          window.location.reload();
+        }
+      }, function () {
+        _diag('base:recheck', 'обе базы не отвечают — остаёмся на кеше');
+      });
+    });
+  }
+
+  // → Promise<база>; кеш возвращается мгновенно, probe только без кеша
+  function _pickBase() {
+    if (window.location.protocol !== 'https:') {
+      _diag('base:pick', 'локальная разработка → прямой URL');
+      return Promise.resolve(SUPA_BASES[1]);
+    }
+    var cached = null;
+    try { cached = localStorage.getItem(BASE_KEY); } catch (e) { /* private mode */ }
+    if (cached && SUPA_BASES.indexOf(cached) !== -1) {
+      _diag('base:pick', 'cached: ' + cached);
+      _recheckBase(cached);
+      return Promise.resolve(cached);
+    }
+    _diag('base:probe', 'кеша нет — обе базы наперегонки');
+    return _probeFirst().then(function (winner) {
+      if (winner) {
+        try { localStorage.setItem(BASE_KEY, winner); } catch (e) { /* private mode */ }
+        _diag('base:pick', 'probe: ' + winner);
+        return winner;
+      }
+      _diag('base:pick', 'fallback: обе мертвы → прокси (дефолт), tt_base не пишем');
+      return SUPA_BASES[0];
+    });
+  }
+
   function _init() {
-    _diag('auth:init', 'createClient');
-    _sb = supabase.createClient(SUPA_URL, ANON, {
-      auth: { lock: _lockWithTimeout }
+    _pickBase().then(_start);
+  }
+
+  function _start(base) {
+    _diag('auth:init', 'createClient, base=' + base);
+    _sb = supabase.createClient(base, ANON, {
+      auth: { lock: _lockWithTimeout, storageKey: STORAGE_KEY }
     });
 
     /* Готовность сессии — только по событию INITIAL_SESSION (или SIGNED_IN):
