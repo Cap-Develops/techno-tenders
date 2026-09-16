@@ -450,12 +450,17 @@
   }
 
   /**
-   * Автозаполнение по номеру извещения через Edge Function.
+   * Автозаполнение по номеру извещения через Edge Function (источник - Тендерплан).
+   * Принимает строку number ИЛИ объект { id } - прямой запрос карточки по _id
+   * Тендерплана (выбор из нескольких совпадений короткого номера).
    * Resolved-ответ надо проверять на data.ok === false (upstream_unavailable).
    * При ошибке бросает Error с русским текстом и свойством .code.
    */
-  function lookupTender(number) {
-    return _sb().functions.invoke('tender-lookup', { body: { number: String(number) } }).then(function (r) {
+  function lookupTender(numberOrRef) {
+    var body = (numberOrRef && typeof numberOrRef === 'object')
+      ? { id: String(numberOrRef.id) }
+      : { number: String(numberOrRef) };
+    return _sb().functions.invoke('tender-lookup', { body: body }).then(function (r) {
       if (!r.error) return r.data;
       var status = r.error.context && r.error.context.status;
       var bodyPromise = Promise.resolve(null);

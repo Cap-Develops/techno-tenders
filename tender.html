@@ -51,6 +51,7 @@
       <button type="button" class="btn-outline btn-sm" id="btnRetry">Повторить</button>
     </div>
     <div class="ok-note" id="lookupOk"></div>
+    <div id="lookupMulti" style="display:none;margin-top:10px"></div>
   </div>
 
   <div id="tenderForm">
@@ -279,7 +280,9 @@
     'customer_contact', 'customer_phone', 'customer_email',
     'delivery_term', 'shipping_act', 'receiving', 'payment_term', 'delivery_address'];
   // поля lookup, по которым решаем auto/partial
-  var LOOKUP_CHECK = ['subject', 'customer', 'customer_ogrn', 'region', 'nmck', 'platform', 'deadline_date', 'deadline_time'];
+  var LOOKUP_CHECK = ['subject', 'customer', 'customer_inn', 'customer_kpp', 'customer_ogrn',
+    'customer_contact', 'customer_phone', 'customer_email',
+    'region', 'nmck', 'platform', 'deadline_date', 'deadline_time'];
   var NUM_LABELS = {
     nmck: 'НМЦК', our_price: 'Наша цена', participation_fee: 'Плата за участие',
     fee_application: 'Стоимость заявки', fee_bg: 'Оформление БГ',
@@ -425,6 +428,9 @@
   // русские подписи полей lookup для confirm в edit-режиме
   var LOOKUP_LABELS = {
     subject: 'Предмет', customer: 'Заказчик', customer_ogrn: 'ОГРН',
+    customer_inn: 'ИНН заказчика', customer_kpp: 'КПП заказчика',
+    customer_contact: 'Контактное лицо', customer_phone: 'Телефон заказчика',
+    customer_email: 'Email заказчика',
     region: 'Регион', nmck: 'НМЦК', platform: 'Площадка', deadline_date: 'Дедлайн подачи',
     deadline_time: 'Время дедлайна (МСК)'
   };
@@ -477,10 +483,108 @@
     $('btnRetry').style.display = canRetry ? '' : 'none';
     $('lookupBanner').style.display = 'flex';
   }
+  // Общий разбор успешного ответа lookup: и по номеру, и по id выбранного варианта
+  function applyLookup(resp, num) {
+    if (!resp || resp.ok === false) {
+      showLookupBanner('Автопоиск недоступен, заполните вручную', true);
+      return;
+    }
+    if (!resp.found) {
+      showLookupBanner('Закупка не найдена - заполните форму вручную', false);
+      return;
+    }
+    // Несколько закупок с одним номером (короткие коммерческие) - даём выбрать
+    if (resp.multiple && resp.multiple.length) {
+      renderLookupMulti(resp.multiple);
+      return;
+    }
+    var d = resp.data || {};
+    // контакты Тендерплана -> имена полей формы
+    if (d.contact_name != null && d.customer_contact == null) d.customer_contact = d.contact_name;
+    if (d.contact_phone != null && d.customer_phone == null) d.customer_phone = d.contact_phone;
+    if (d.contact_email != null && d.customer_email == null) d.customer_email = d.contact_email;
+    // auction_* из data игнорируются: полей аукциона в UI нет
+    // данные lookup - только в .value инпутов, не в innerHTML
+    if (isNew) {
+      // режим создания: заполнение прямое
+      fld('notice_number').value = d.number != null ? String(d.number) : num;
+      ['subject', 'customer', 'customer_inn', 'customer_kpp', 'customer_ogrn',
+       'customer_contact', 'customer_phone', 'customer_email', 'region', 'platform'].forEach(function (f) {
+        if (d[f] != null) fld(f).value = String(d[f]);
+      });
+      if (d.nmck != null) fld('nmck').value = String(d.nmck);
+      if (d.deadline_date) fld('deadline_date').value = String(d.deadline_date).slice(0, 10);
+      if (d.deadline_time) fld('deadline_time').value = String(d.deadline_time).slice(0, 5);
+      _lookupNumber = fld('notice_number').value.trim();
+    } else {
+      // режим редактирования: пустые - сразу, конфликты - через confirm
+      mergeLookupIntoForm(d);
+      _lookupNumber = num;
+    }
+    var partial = LOOKUP_CHECK.some(function (f) { return d[f] == null; });
+    _lookupStatus = partial ? 'partial' : 'auto';
+    _lookupSource = resp;
+    updateLawBadge();
+    updateTotal();
+    updatePlatformOpen(); // lookup мог заполнить площадку без события input
+    var okEl = $('lookupOk');
+    okEl.textContent = partial
+      ? 'Данные заполнены частично - дополните недостающие поля и сохраните'
+      : 'Данные заполнены - проверьте, дополните при необходимости и сохраните';
+    // ссылка на карточку извещения: только https?-URL, через DOM-свойство (не innerHTML)
+    if (d.notice_url && /^https?:\/\//i.test(String(d.notice_url))) {
+      var a = document.createElement('a');
+      a.href = String(d.notice_url);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Открыть извещение ↗';
+      a.style.marginLeft = '8px';
+      okEl.appendChild(document.createTextNode(' '));
+      okEl.appendChild(a);
+    }
+    okEl.style.display = 'block';
+    // DaData-фолбэк: только если Тендерплан не дал ИНН сам (обычно даёт)
+    if (!fld('customer_inn').value.trim()) autoFillByOgrn();
+  }
+
+  // Список вариантов под полем номера. Всё через esc; кнопки type=button -
+  // клики не триггерят сохранение. Клик = запрос карточки по _id Тендерплана.
+  function renderLookupMulti(list) {
+    var wrap = $('lookupMulti');
+    wrap.innerHTML = '<div style="margin-bottom:4px">Найдено несколько закупок с этим номером - выберите нужную:</div>' +
+      list.map(function (v) {
+        var meta = [v.year, v.customer].filter(Boolean).join(' · ');
+        var text = (meta ? meta + ' - ' : '') + (v.subject || 'без названия');
+        return '<button type="button" class="btn-outline btn-sm lookup-variant"' +
+          ' data-id="' + Common.esc(v.id || '') + '"' +
+          ' style="display:block;width:100%;text-align:left;margin-top:6px;white-space:normal">' +
+          Common.esc(text) + '</button>';
+      }).join('');
+    wrap.style.display = '';
+    Array.prototype.forEach.call(wrap.querySelectorAll('.lookup-variant'), function (btn) {
+      btn.addEventListener('click', function () { pickLookupVariant(btn.getAttribute('data-id')); });
+    });
+  }
+
+  function pickLookupVariant(id) {
+    if (!id) return;
+    $('lookupMulti').style.display = 'none';
+    $('lookupBanner').style.display = 'none';
+    setLookupBusy(true);
+    Common.lookupTender({ id: id }).then(function (resp) {
+      setLookupBusy(false);
+      applyLookup(resp, $('lookupNumber').value.trim());
+    }).catch(function (e) {
+      setLookupBusy(false);
+      showLookupBanner(e.message || 'Автопоиск недоступен, заполните вручную', true);
+    });
+  }
+
   function doLookup() {
     var num = $('lookupNumber').value.trim();
     $('lookupBanner').style.display = 'none';
     $('lookupOk').style.display = 'none';
+    $('lookupMulti').style.display = 'none';
     if (!num) { showLookupBanner('Введите номер закупки', false); return; }
     // Зеркало серверной валидации: strip пробелов/№, дефисы и буквы сохраняются;
     // 11/19 цифр (223/44-ФЗ) или номер площадки [буквы/цифры/дефис]{4,30}.
@@ -492,42 +596,7 @@
     setLookupBusy(true);
     Common.lookupTender(num).then(function (resp) {
       setLookupBusy(false);
-      if (!resp || resp.ok === false) {
-        showLookupBanner('Автопоиск недоступен, заполните вручную', true);
-        return;
-      }
-      if (!resp.found) {
-        showLookupBanner('Закупка не найдена - заполните форму вручную', false);
-        return;
-      }
-      var d = resp.data || {};
-      // данные lookup - только в .value инпутов, не в innerHTML
-      if (isNew) {
-        // режим создания: заполнение прямое
-        fld('notice_number').value = d.number != null ? String(d.number) : num;
-        ['subject', 'customer', 'customer_ogrn', 'region', 'platform'].forEach(function (f) {
-          if (d[f] != null) fld(f).value = String(d[f]);
-        });
-        if (d.nmck != null) fld('nmck').value = String(d.nmck);
-        if (d.deadline_date) fld('deadline_date').value = String(d.deadline_date).slice(0, 10);
-        if (d.deadline_time) fld('deadline_time').value = String(d.deadline_time).slice(0, 5);
-        _lookupNumber = fld('notice_number').value.trim();
-      } else {
-        // режим редактирования: пустые - сразу, конфликты - через confirm
-        mergeLookupIntoForm(d);
-        _lookupNumber = num;
-      }
-      var partial = LOOKUP_CHECK.some(function (f) { return d[f] == null; });
-      _lookupStatus = partial ? 'partial' : 'auto';
-      _lookupSource = resp;
-      updateLawBadge();
-      updateTotal();
-      updatePlatformOpen(); // lookup мог заполнить площадку без события input
-      $('lookupOk').textContent = partial
-        ? 'Данные заполнены частично - дополните недостающие поля и сохраните'
-        : 'Данные заполнены - проверьте, дополните при необходимости и сохраните';
-      $('lookupOk').style.display = 'block';
-      autoFillByOgrn();
+      applyLookup(resp, num);
     }).catch(function (e) {
       setLookupBusy(false);
       showLookupBanner(e.message || 'Автопоиск недоступен, заполните вручную', true);
