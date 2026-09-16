@@ -5,8 +5,9 @@
   // на Vercel): браузер общается только с techno-tenders.new--project.ru,
   // зарубежный участок проходит по каналу Vercel↔AWS. Прямой URL - только
   // для локальной разработки (http/localhost, где rewrite не работает).
-  // GitHub Pages не умеет rewrite - ходим в Supabase напрямую (из РФ доступен, проверено 2026-09-15)
-  var SUPA_URL = 'https://uclzyzztoripulpcpshp.supabase.co';
+  // Прокси к Supabase на Netlify (newproject-sb): без него Chrome в РФ лезет к Cloudflare по QUIC,
+  // который провайдеры режут - запросы висят и падают по таймауту (2026-09-16). Netlify h3 не объявляет.
+  var SUPA_URL = 'https://newproject-sb.netlify.app';
   var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjbHp5enp0b3JpcHVscGNwc2hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODIyNzMsImV4cCI6MjA5MjM1ODI3M30.rX-WT1WdZiwRakVcUEkcg-_dnWzfU49LvgTNHYgBYQ0';
 
   var _sb = null;
