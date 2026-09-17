@@ -11,10 +11,17 @@
      2026-09-17) выбирала «кто быстрее ответит», а быстрый ответ лёгкого
      запроса ≠ рабочий канал данных.
      Probe идёт по РЕАЛЬНОМУ пути данных: POST /rest/v1/rpc/tt_whoami с
-     apikey и без JWT → 401 (permission denied). Любой HTTP-ответ <500
+     apikey и anon-JWT → 401 (permission denied). Любой HTTP-ответ <500
      доказывает, что REST-канал живой и отвечает. Лёгкий health-эндпоинт
      GoTrue (probe до 2026-09-17) для этого не годится: он проходит даже
      там, где REST/rpc душатся — именно на этом и залип владелец.
+     Probe РЕАЛИСТИЧЕН ПО РАЗМЕРУ: заголовок X-Probe-Pad (~1200 символов)
+     имитирует JWT сессии (~900 байт), который несут все настоящие запросы.
+     На голом провайдерском канале (Chrome исключён из VPN) маленький
+     запрос к прямому supabase.co проходит, а большой режется DPI/MTU —
+     лёгкий probe считал прямой канал живым, ключ не перезаписывался,
+     «Проверка доступа» висела навечно (2026-09-17). PostgREST лишний
+     заголовок игнорирует (401, не 431), CORS-preflight его отражает.
      Выбранная база запоминается в localStorage tt_base: на старте берётся
      мгновенно (нулевая задержка), а параллельно в фоне probe проверяет,
      жива ли она — мёртвый кеш при живой второй базе перезаписывается
@@ -34,6 +41,7 @@
   var BASE_RELOAD_FLAG = 'tt_base_reloaded';   // sessionStorage: reload на живую базу максимум один раз
   var BASE_SWITCH_FLAG = 'tt_base_switched';   // sessionStorage: автопереключение базы после провала роли — один раз за сессию
   var PROBE_TIMEOUT_MS = 2500;
+  var PROBE_PAD = 'x'.repeat(1200);              // имитация JWT-заголовка: probe того же размера, что реальный запрос
   var _base = null; // база, на которой создан текущий клиент
   /* Ключ сессии ФИКСИРОВАН: дефолт supabase-js — sb-<хост базы>-auth-token,
      т.е. при смене базы сессия «терялась» бы. Значение равно старому дефолту
@@ -333,14 +341,15 @@
   function _otherBase(base) { return SUPA_BASES[base === SUPA_BASES[1] ? 0 : 1]; }
 
   /* Канал жив = любой HTTP-ответ со статусом <500 за PROBE_TIMEOUT_MS на
-     РЕАЛЬНОМ пути данных: POST rpc tt_whoami с apikey, без JWT → 401. */
+     РЕАЛЬНОМ пути данных и с РЕАЛЬНЫМ размером запроса: POST rpc tt_whoami
+     с apikey, anon-JWT в Authorization и X-Probe-Pad ~1200 байт → 401. */
   function _probe(base) {
     return new Promise(function (resolve, reject) {
       var ctrl = new AbortController();
       var timer = setTimeout(function () { ctrl.abort(); reject(new Error('таймаут ' + PROBE_TIMEOUT_MS + 'мс')); }, PROBE_TIMEOUT_MS);
       fetch(base + '/rest/v1/rpc/tt_whoami', {
         method: 'POST',
-        headers: { apikey: ANON, 'Content-Type': 'application/json' },
+        headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Content-Type': 'application/json', 'X-Probe-Pad': PROBE_PAD },
         body: '{}',
         signal: ctrl.signal,
         cache: 'no-store'

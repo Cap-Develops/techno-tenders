@@ -59,10 +59,13 @@ body{font-family:'Golos Text',system-ui,Arial,sans-serif;background:#F0F4F8;min-
    ?base=proxy|direct сильнее всего (probe пропускается); иначе кеш tt_base
    мгновенно + фоновый probe; без кеша — ПОСЛЕДОВАТЕЛЬНО прокси → прямой,
    без гонки по скорости; обе мертвы → прокси (дефолт). Probe идёт по
-   реальному пути данных (POST rpc tt_whoami без JWT → 401), а не по
+   реальному пути данных (POST rpc tt_whoami с anon-JWT → 401), а не по
    health-эндпоинту GoTrue: лёгкий health проходит и там, где REST душится.
+   Probe реалистичен по размеру: X-Probe-Pad ~1200 байт имитирует JWT
+   сессии — на голом канале маленький запрос проходит, большой режется.
    storageKey фиксирован, чтобы сессия не зависела от выбранной базы. */
 var SUPA_BASES = ['https://newproject-sb.netlify.app', 'https://uclzyzztoripulpcpshp.supabase.co'];
+var PROBE_PAD = 'x'.repeat(1200);
 var STORAGE_KEY = 'sb-newproject-sb-auth-token';
 var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjbHp5enp0b3JpcHVscGNwc2hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODIyNzMsImV4cCI6MjA5MjM1ODI3M30.rX-WT1WdZiwRakVcUEkcg-_dnWzfU49LvgTNHYgBYQ0';
 var _sb = null; // создаётся после выбора базы
@@ -73,7 +76,7 @@ function probeBase(base) {
     var timer = setTimeout(function() { ctrl.abort(); reject(new Error('timeout')); }, 2500);
     fetch(base + '/rest/v1/rpc/tt_whoami', {
       method: 'POST',
-      headers: { apikey: ANON, 'Content-Type': 'application/json' },
+      headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Content-Type': 'application/json', 'X-Probe-Pad': PROBE_PAD },
       body: '{}', signal: ctrl.signal, cache: 'no-store'
     })
       .then(function(r) { clearTimeout(timer); if (r.status < 500) resolve(base); else reject(new Error('status ' + r.status)); },
