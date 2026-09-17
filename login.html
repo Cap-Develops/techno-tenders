@@ -56,9 +56,12 @@ body{font-family:'Golos Text',system-ui,Arial,sans-serif;background:#F0F4F8;min-
 <script src="supabase-2.110.min.js"></script>
 <script>
 /* Выбор базы Supabase — компактный дубль логики из auth.js (менять синхронно):
-   кеш tt_base мгновенно + фоновый probe; без кеша — обе базы наперегонки;
-   обе мертвы → прокси (дефолт). storageKey фиксирован, чтобы сессия
-   не зависела от выбранной базы. */
+   ?base=proxy|direct сильнее всего (probe пропускается); иначе кеш tt_base
+   мгновенно + фоновый probe; без кеша — ПОСЛЕДОВАТЕЛЬНО прокси → прямой,
+   без гонки по скорости; обе мертвы → прокси (дефолт). Probe идёт по
+   реальному пути данных (POST rpc tt_whoami без JWT → 401), а не по
+   health-эндпоинту GoTrue: лёгкий health проходит и там, где REST душится.
+   storageKey фиксирован, чтобы сессия не зависела от выбранной базы. */
 var SUPA_BASES = ['https://newproject-sb.netlify.app', 'https://uclzyzztoripulpcpshp.supabase.co'];
 var STORAGE_KEY = 'sb-newproject-sb-auth-token';
 var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjbHp5enp0b3JpcHVscGNwc2hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODIyNzMsImV4cCI6MjA5MjM1ODI3M30.rX-WT1WdZiwRakVcUEkcg-_dnWzfU49LvgTNHYgBYQ0';
@@ -68,7 +71,11 @@ function probeBase(base) {
   return new Promise(function(resolve, reject) {
     var ctrl = new AbortController();
     var timer = setTimeout(function() { ctrl.abort(); reject(new Error('timeout')); }, 2500);
-    fetch(base + '/auth/v1/health', { headers: { apikey: ANON }, signal: ctrl.signal, cache: 'no-store' })
+    fetch(base + '/rest/v1/rpc/tt_whoami', {
+      method: 'POST',
+      headers: { apikey: ANON, 'Content-Type': 'application/json' },
+      body: '{}', signal: ctrl.signal, cache: 'no-store'
+    })
       .then(function(r) { clearTimeout(timer); if (r.status < 500) resolve(base); else reject(new Error('status ' + r.status)); },
             function(e) { clearTimeout(timer); reject(e); });
   });
@@ -76,7 +83,16 @@ function probeBase(base) {
 function setBase(base) {
   _sb = supabase.createClient(base, ANON, { auth: { storageKey: STORAGE_KEY } });
 }
+function forcedBase() {
+  var m = /[?&]base=(proxy|direct)\b/.exec(window.location.search || '');
+  return m ? (m[1] === 'direct' ? SUPA_BASES[1] : SUPA_BASES[0]) : null;
+}
 function pickBase() {
+  var forced = forcedBase();
+  if (forced) {
+    try { localStorage.setItem('tt_base', forced); } catch (e) {}
+    return Promise.resolve(forced);
+  }
   if (window.location.protocol !== 'https:') return Promise.resolve(SUPA_BASES[1]); // локальная разработка — прямой URL
   var cached = null;
   try { cached = localStorage.getItem('tt_base'); } catch (e) {}
@@ -91,17 +107,12 @@ function pickBase() {
     });
     return Promise.resolve(cached);
   }
-  return new Promise(function(resolve) {
-    var left = SUPA_BASES.length, done = false;
-    SUPA_BASES.forEach(function(b) {
-      probeBase(b).then(function() {
-        if (done) return;
-        done = true;
-        try { localStorage.setItem('tt_base', b); } catch (e) {}
-        resolve(b);
-      }, function() { if (!done && --left === 0) resolve(SUPA_BASES[0]); });
-    });
-  });
+  // Без кеша — по приоритету: прокси (целевой канал), прямой только если прокси мёртв
+  return probeBase(SUPA_BASES[0]).then(null, function() { return probeBase(SUPA_BASES[1]); })
+    .then(function(b) {
+      try { localStorage.setItem('tt_base', b); } catch (e) {}
+      return b;
+    }, function() { return SUPA_BASES[0]; }); // обе мертвы → прокси-дефолт, ключ не пишем
 }
 
 // Только внутренний путь: один '/' в начале, без '//' и '/\' (open redirect)

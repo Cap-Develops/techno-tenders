@@ -4,24 +4,37 @@
   /* ═══ Выбор базы Supabase: прокси или прямой URL ═══
      Разным машинам нужны РАЗНЫЕ пути: у одних провайдер душит netlify.app
      (прокси), у других режет QUIC к Cloudflare (прямой supabase.co).
-     Кандидаты в порядке приоритета: прокси Netlify (дефолт, 2026-09-16),
-     затем прямой URL. Выбранная база запоминается в localStorage tt_base:
-     на старте берётся мгновенно (нулевая задержка), а параллельно в фоне
-     probe проверяет, жива ли она — мёртвый кеш при живой второй базе
-     перезаписывается (+ один reload, пока страница не загрузила данные).
-     Без кеша обе базы пробуются наперегонки GET /auth/v1/health (c apikey:
-     на обеих отдаёт 200, а любой статус <500 = канал жив). Обе мертвы →
-     прокси (дефолт), ключ не пишется — дальше сработает обычный экран
-     «Сервер недоступен + Повторить». Локальная разработка (не-https) —
-     прямой URL без probe. Компактная копия этой логики живёт в login.html
-     (он не подключает auth.js) — менять синхронно. */
+     Кандидаты в порядке приоритета: прокси Netlify (целевой канал, дефолт),
+     затем прямой URL (аварийный — для тех, у кого придушен netlify.app).
+     Выбор СТРОГО ПОСЛЕДОВАТЕЛЬНЫЙ, без гонки по скорости: probe прокси →
+     жив? берём прокси; мёртв → probe прямого. Гонка наперегонки (было до
+     2026-09-17) выбирала «кто быстрее ответит», а быстрый ответ лёгкого
+     запроса ≠ рабочий канал данных.
+     Probe идёт по РЕАЛЬНОМУ пути данных: POST /rest/v1/rpc/tt_whoami с
+     apikey и без JWT → 401 (permission denied). Любой HTTP-ответ <500
+     доказывает, что REST-канал живой и отвечает. Лёгкий health-эндпоинт
+     GoTrue (probe до 2026-09-17) для этого не годится: он проходит даже
+     там, где REST/rpc душатся — именно на этом и залип владелец.
+     Выбранная база запоминается в localStorage tt_base: на старте берётся
+     мгновенно (нулевая задержка), а параллельно в фоне probe проверяет,
+     жива ли она — мёртвый кеш при живой второй базе перезаписывается
+     (+ один reload, пока страница не загрузила данные). Обе мертвы →
+     прокси (дефолт), ключ не пишется — дальше сработает экран «Сервер
+     недоступен» с кнопками «Повторить» и «Сменить канал связи».
+     Ручной аварийный выход без консоли: ?base=proxy / ?base=direct —
+     пишет базу в tt_base и использует немедленно, probe пропускается.
+     Локальная разработка (не-https) — прямой URL без probe.
+     Компактная копия этой логики живёт в login.html (он не подключает
+     auth.js) — менять синхронно. */
   var SUPA_BASES = [
     'https://newproject-sb.netlify.app',        // прокси Netlify (дефолт)
     'https://uclzyzztoripulpcpshp.supabase.co'  // прямой URL
   ];
   var BASE_KEY = 'tt_base';
-  var BASE_RELOAD_FLAG = 'tt_base_reloaded'; // sessionStorage: reload на живую базу максимум один раз
+  var BASE_RELOAD_FLAG = 'tt_base_reloaded';   // sessionStorage: reload на живую базу максимум один раз
+  var BASE_SWITCH_FLAG = 'tt_base_switched';   // sessionStorage: автопереключение базы после провала роли — один раз за сессию
   var PROBE_TIMEOUT_MS = 2500;
+  var _base = null; // база, на которой создан текущий клиент
   /* Ключ сессии ФИКСИРОВАН: дефолт supabase-js — sb-<хост базы>-auth-token,
      т.е. при смене базы сессия «терялась» бы. Значение равно старому дефолту
      прокси, чтобы существующие сессии пережили этот деплой. */
@@ -125,14 +138,57 @@
   function _netPrefClear() { try { localStorage.removeItem(NET_PREF_KEY); } catch (e) { /* private mode */ } }
 
   function _showRetry(session) {
-    _overlay.innerHTML = '<div style="text-align:center"><div style="color:#666;font-size:14px;margin-bottom:16px">Сервер недоступен. Проверьте интернет / VPN.</div><button id="auth-retry-btn" style="background:#1565C0;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;font-weight:600;cursor:pointer">Повторить</button></div>';
-    // Обработчик вешается на свежесозданную кнопку; при клике innerHTML
-    // заменяется на спиннер — кнопка и обработчик удаляются, дублей нет.
+    _overlay.innerHTML = '<div style="text-align:center"><div style="color:#666;font-size:14px;margin-bottom:16px">Сервер недоступен. Проверьте интернет / VPN.</div><button id="auth-retry-btn" style="background:#1565C0;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;font-weight:600;cursor:pointer">Повторить</button><button id="auth-switch-btn" style="background:transparent;color:#1565C0;border:1.5px solid #1565C0;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;margin-left:10px">Сменить канал связи</button></div>';
+    // Обработчики вешаются на свежесозданные кнопки; при клике innerHTML
+    // заменяется на спиннер — кнопки и обработчики удаляются, дублей нет.
     _overlay.querySelector('#auth-retry-btn').addEventListener('click', function () {
       if (_roleChecking) return;
       _diag('role:retry-click', 'повторная проверка по кнопке');
       _overlay.innerHTML = SPINNER_HTML;
       _checkRole(session);
+    });
+    // Ручное переключение канала: вторая база + снятие флага автопереключения
+    // (чтобы автоматика снова могла вернуть обратно) + перезагрузка.
+    _overlay.querySelector('#auth-switch-btn').addEventListener('click', function () {
+      var other = _otherBase(_base);
+      try {
+        localStorage.setItem(BASE_KEY, other);
+        sessionStorage.removeItem(BASE_SWITCH_FLAG);
+      } catch (e) { /* private mode — reload всё равно имеет смысл */ }
+      _diag('base:switch-click', 'tt_base → ' + other + ', reload');
+      _overlay.innerHTML = SPINNER_HTML;
+      window.location.reload();
+    });
+  }
+
+  /* Оба канала роли не дали ответа. Главная страховка от «мёртвой» базы:
+     пока флаг автопереключения не стоит и вторая база живая по probe —
+     один раз за сессию переключаемся на неё и перезагружаемся. Флаг стоит
+     или вторая база тоже мертва → обычный экран «Сервер недоступен». */
+  function _roleUnavailable(session, why) {
+    _diag('role:unavailable', why);
+    var switched = '1';
+    try { switched = sessionStorage.getItem(BASE_SWITCH_FLAG); } catch (e) { switched = '1'; } // private mode: без автопереключения, чтобы не зациклиться
+    if (switched) {
+      _diag('base:autoswitch', 'уже переключались в этой сессии → экран');
+      _showRetry(session);
+      return;
+    }
+    var other = _otherBase(_base);
+    _diag('base:autoswitch', 'probe второй базы ' + other);
+    _probe(other).then(function () {
+      try {
+        sessionStorage.setItem(BASE_SWITCH_FLAG, '1');
+        localStorage.setItem(BASE_KEY, other);
+      } catch (e) {
+        _showRetry(session);
+        return;
+      }
+      _diag('base:autoswitch', 'tt_base → ' + other + ', reload');
+      window.location.reload();
+    }, function (e) {
+      _diag('base:autoswitch', 'вторая база тоже мертва (' + ((e && e.message) || e) + ') → экран');
+      _showRetry(session);
     });
   }
 
@@ -159,11 +215,10 @@
     var deadline = setTimeout(function () {
       if (settled) return;
       settled = true;
-      _diag('role:unavailable', 'оба канала молчат ' + ROLE_TIMEOUT_MS + 'мс → кнопка «Повторить»');
       getCtrl.abort();
       rpcCtrl.abort();
       _roleChecking = false;
-      _showRetry(session);
+      _roleUnavailable(session, 'оба канала молчат ' + ROLE_TIMEOUT_MS + 'мс');
     }, ROLE_TIMEOUT_MS);
 
     function _cleanup() {
@@ -176,8 +231,7 @@
       settled = true;
       _cleanup();
       _roleChecking = false;
-      _diag('role:unavailable', 'оба канала неудачны → кнопка «Повторить»');
-      _showRetry(session);
+      _roleUnavailable(session, 'оба канала неудачны');
     }
 
     // Успешный ответ канала (data может быть null — валидное «роли нет»)
@@ -276,12 +330,21 @@
 
   /* ═══ Probe и выбор базы (см. комментарий у SUPA_BASES) ═══ */
 
-  // Канал жив = любой ответ со статусом <500 за PROBE_TIMEOUT_MS
+  function _otherBase(base) { return SUPA_BASES[base === SUPA_BASES[1] ? 0 : 1]; }
+
+  /* Канал жив = любой HTTP-ответ со статусом <500 за PROBE_TIMEOUT_MS на
+     РЕАЛЬНОМ пути данных: POST rpc tt_whoami с apikey, без JWT → 401. */
   function _probe(base) {
     return new Promise(function (resolve, reject) {
       var ctrl = new AbortController();
       var timer = setTimeout(function () { ctrl.abort(); reject(new Error('таймаут ' + PROBE_TIMEOUT_MS + 'мс')); }, PROBE_TIMEOUT_MS);
-      fetch(base + '/auth/v1/health', { headers: { apikey: ANON }, signal: ctrl.signal, cache: 'no-store' })
+      fetch(base + '/rest/v1/rpc/tt_whoami', {
+        method: 'POST',
+        headers: { apikey: ANON, 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: ctrl.signal,
+        cache: 'no-store'
+      })
         .then(function (r) {
           clearTimeout(timer);
           if (r.status < 500) resolve(base);
@@ -293,22 +356,22 @@
     });
   }
 
-  // Обе базы наперегонки; победитель — первый живой ответ; обе мертвы → null
-  function _probeFirst() {
-    return new Promise(function (resolve) {
-      var left = SUPA_BASES.length;
-      var done = false;
-      SUPA_BASES.forEach(function (base) {
-        _probe(base).then(function () {
-          if (done) return;
-          done = true;
-          resolve(base);
-        }, function () {
-          left--;
-          if (!done && left === 0) resolve(null);
-        });
-      });
+  /* Последовательно по приоритету: прокси жив → прокси, иначе прямой.
+     Обе мертвы → null. Прямой НЕ пробуется, пока прокси отвечает. */
+  function _probeOrdered() {
+    return _probe(SUPA_BASES[0]).then(function () {
+      return SUPA_BASES[0];
+    }, function (e) {
+      _diag('base:probe', 'прокси мёртв (' + ((e && e.message) || e) + ') → probe прямого');
+      return _probe(SUPA_BASES[1]).then(function () { return SUPA_BASES[1]; }, function () { return null; });
     });
+  }
+
+  // ?base=proxy | ?base=direct — ручной аварийный выход без консоли
+  function _forcedBase() {
+    var m = /[?&]base=(proxy|direct)\b/.exec(window.location.search || '');
+    if (!m) return null;
+    return m[1] === 'direct' ? SUPA_BASES[1] : SUPA_BASES[0];
   }
 
   /* Фоновая проверка кешированной базы: мертва при живой второй →
@@ -318,7 +381,7 @@
     _probe(cached).then(function () {
       _diag('base:recheck', 'кешированная база жива');
     }, function (e) {
-      var other = SUPA_BASES[cached === SUPA_BASES[0] ? 1 : 0];
+      var other = _otherBase(cached);
       _diag('base:recheck', 'кеш мёртв (' + ((e && e.message) || e) + ') — probe ' + other);
       _probe(other).then(function () {
         try { localStorage.setItem(BASE_KEY, other); } catch (err) { return; }
@@ -336,8 +399,14 @@
     });
   }
 
-  // → Promise<база>; кеш возвращается мгновенно, probe только без кеша
+  // → Promise<база>; ?base= сильнее всего, затем кеш (мгновенно), иначе probe
   function _pickBase() {
+    var forced = _forcedBase();
+    if (forced) {
+      try { localStorage.setItem(BASE_KEY, forced); } catch (e) { /* private mode */ }
+      _diag('base:forced', forced);
+      return Promise.resolve(forced);
+    }
     if (window.location.protocol !== 'https:') {
       _diag('base:pick', 'локальная разработка → прямой URL');
       return Promise.resolve(SUPA_BASES[1]);
@@ -349,8 +418,8 @@
       _recheckBase(cached);
       return Promise.resolve(cached);
     }
-    _diag('base:probe', 'кеша нет — обе базы наперегонки');
-    return _probeFirst().then(function (winner) {
+    _diag('base:probe', 'кеша нет — probe по приоритету (прокси → прямой)');
+    return _probeOrdered().then(function (winner) {
       if (winner) {
         try { localStorage.setItem(BASE_KEY, winner); } catch (e) { /* private mode */ }
         _diag('base:pick', 'probe: ' + winner);
@@ -366,6 +435,7 @@
   }
 
   function _start(base) {
+    _base = base;
     _diag('auth:init', 'createClient, base=' + base);
     _sb = supabase.createClient(base, ANON, {
       auth: { lock: _lockWithTimeout, storageKey: STORAGE_KEY }
